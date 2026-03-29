@@ -8,10 +8,10 @@ Each task gets its own branch, worktree, tmux window, and agent session. Clean l
 
 ## Dependencies
 
-- Go 1.24+, 
+- Go 1.24+
 - git
 - tmux
-- an agent CLI. current default setup uses `opencode` with `openai/gpt-5.4`.
+- opencode
 
 ## Install
 
@@ -91,6 +91,7 @@ When you start work, `conduct` will:
 - create a git worktree under `.conduct/worktrees/`
 - write the active assignment to `.conduct/current.md` inside that worktree
 - create a tmux window for the task
+- create a pane in `podium` window tailing `.conduct/notifications.log`
 - launch your configured agent command in that window
 
 If you are already inside tmux, the task starts in the background and `conduct` prints the target window. Otherwise it opens the task window for you.
@@ -137,7 +138,32 @@ agent:
   default_model: openai/gpt-5.4
 tmux:
   session_prefix: conduct
+notifications:
+  enabled: true
+  log_path: .conduct/notifications.log
+  tmux:
+    enabled: true
+    window: podium
+    pane_title: conductor-notifications
+    height: 12
 ```
+
+## OpenCode notifications
+
+Conductor ships a project-local OpenCode plugin at `.opencode/plugins/conductor-notify.js`. OpenCode auto-loads project plugins, so this repo does not need an external notifier package.
+
+OpenCode is required for this integration. Conductor depends on OpenCode's local plugin system for notification event detection.
+
+The plugin watches OpenCode events and calls `conduct notify` for these attention signals:
+
+- `question` tool usage, including non-permission questions
+- `permission.asked`
+- `session.error`
+- `session.idle`
+
+`conduct notify` appends events to `.conduct/notifications.log` and, when the project tmux session exists, keeps a dedicated pane alive in the `podium` window to tail that log. The current implementation is tmux-first, but the config shape leaves room for additional channels later.
+
+When OpenCode is launched by `conduct start`, conductor injects `CONDUCT_ROOT` and `CONDUCT_SESSION_NAME` into the agent environment, so the plugin command can route back to the correct project session even though it is running inside a task worktree.
 
 ## Reference
 

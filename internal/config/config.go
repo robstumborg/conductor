@@ -18,9 +18,10 @@ const (
 )
 
 type Config struct {
-	Project ProjectConfig `yaml:"project"`
-	Agent   AgentConfig   `yaml:"agent"`
-	Tmux    TmuxConfig    `yaml:"tmux"`
+	Project       ProjectConfig      `yaml:"project"`
+	Agent         AgentConfig        `yaml:"agent"`
+	Tmux          TmuxConfig         `yaml:"tmux"`
+	Notifications NotificationConfig `yaml:"notifications"`
 }
 
 type ProjectConfig struct {
@@ -38,6 +39,19 @@ type TmuxConfig struct {
 	SessionPrefix string `yaml:"session_prefix"`
 }
 
+type NotificationConfig struct {
+	Enabled *bool                  `yaml:"enabled"`
+	LogPath string                 `yaml:"log_path"`
+	Tmux    TmuxNotificationConfig `yaml:"tmux"`
+}
+
+type TmuxNotificationConfig struct {
+	Enabled   *bool  `yaml:"enabled"`
+	Window    string `yaml:"window"`
+	PaneTitle string `yaml:"pane_title"`
+	Height    int    `yaml:"height"`
+}
+
 func Default() *Config {
 	return &Config{
 		Project: ProjectConfig{MainBranch: "main"},
@@ -51,6 +65,16 @@ func Default() *Config {
 			Prompt: "Open `.conduct/current.md` for your assignment. Complete the requested work in this worktree. If helpful, update `.conduct/current.md` with notes before stopping; conductor will sync those notes back into the durable work record later. Do not include `.conduct/current.md` in your final commit. When you are finished, stage and commit your actual task changes on this branch before stopping.",
 		},
 		Tmux: TmuxConfig{SessionPrefix: "conduct"},
+		Notifications: NotificationConfig{
+			Enabled: boolPtr(true),
+			LogPath: filepath.Join(ConductDir, "notifications.log"),
+			Tmux: TmuxNotificationConfig{
+				Enabled:   boolPtr(true),
+				Window:    "podium",
+				PaneTitle: "conductor-notifications",
+				Height:    12,
+			},
+		},
 	}
 }
 
@@ -88,8 +112,38 @@ func Load(root string) (*Config, error) {
 	if cfg.Tmux.SessionPrefix == "" {
 		cfg.Tmux.SessionPrefix = defaults.Tmux.SessionPrefix
 	}
+	if cfg.Notifications.Enabled == nil {
+		cfg.Notifications.Enabled = defaults.Notifications.Enabled
+	}
+	if cfg.Notifications.LogPath == "" {
+		cfg.Notifications.LogPath = defaults.Notifications.LogPath
+	}
+	if cfg.Notifications.Tmux.Enabled == nil {
+		cfg.Notifications.Tmux.Enabled = defaults.Notifications.Tmux.Enabled
+	}
+	if cfg.Notifications.Tmux.Window == "" {
+		cfg.Notifications.Tmux.Window = defaults.Notifications.Tmux.Window
+	}
+	if cfg.Notifications.Tmux.PaneTitle == "" {
+		cfg.Notifications.Tmux.PaneTitle = defaults.Notifications.Tmux.PaneTitle
+	}
+	if cfg.Notifications.Tmux.Height == 0 {
+		cfg.Notifications.Tmux.Height = defaults.Notifications.Tmux.Height
+	}
 
 	return &cfg, nil
+}
+
+func (c NotificationConfig) EnabledValue() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+func (c TmuxNotificationConfig) EnabledValue() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func Save(root string, cfg *Config) error {

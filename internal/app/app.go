@@ -4,11 +4,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/robstumborg/conductor/internal/editor"
 	"github.com/robstumborg/conductor/internal/git"
 	"github.com/robstumborg/conductor/internal/model"
+	"github.com/robstumborg/conductor/internal/notify"
 	"github.com/robstumborg/conductor/internal/tmux"
 	"github.com/robstumborg/conductor/internal/work"
 )
@@ -43,6 +46,7 @@ var killWindowFn = tmux.KillWindow
 var listSessionsFn = tmux.ListSessions
 var saveWorkFn = work.Save
 var modelpkgValidate = model.ValidateAvailable
+var notifyDispatchFn = notify.Dispatch
 
 type stringList []string
 
@@ -105,6 +109,8 @@ func Run(args []string) error {
 		return runConfig(args[1:])
 	case "doctor":
 		return runDoctor()
+	case "notify":
+		return runNotify(args[1:])
 	case "version", "--version", "-v":
 		fmt.Printf("build commit: %s\n", buildCommit)
 		fmt.Printf("build date: %s\n", buildDate)
@@ -422,6 +428,9 @@ func startWorkItem(root string, item *work.Item, startModel string) (retErr erro
 	if err := ensureLocalExcludesFn(worktreePath, []string{config.CurrentWorkPath, config.WorktreesDir + "/"}); err != nil {
 		return err
 	}
+	if err := syncOpencodeDir(root, worktreePath); err != nil {
+		return err
+	}
 
 	currentPath := filepath.Join(worktreePath, config.CurrentWorkPath)
 	if err := os.MkdirAll(filepath.Dir(currentPath), 0755); err != nil {
@@ -441,12 +450,25 @@ func startWorkItem(root string, item *work.Item, startModel string) (retErr erro
 		}
 		createdSession = true
 	}
+	if cfg.Notifications.EnabledValue() && cfg.Notifications.Tmux.EnabledValue() {
+		if err := notifyDispatchFn(root, sessionName, cfg, notify.Event{
+			Name:    "session_started",
+			TaskID:  updated.PaddedID(),
+			Title:   updated.Title,
+			Branch:  updated.Branch,
+			Model:   resolvedModel,
+			Message: "Agent session started",
+			Time:    time.Now(),
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: notification setup failed: %v\n", err)
+		}
+	}
 	if !windowExistsFn(sessionName, windowName) {
 		if err := createWindowFn(sessionName, windowName, worktreePath); err != nil {
 			return err
 		}
 		createdWindow = true
-		if err := sendKeysFn(sessionTarget(sessionName, windowName), buildAgentCommand(cfg, &updated, resolvedModel)); err != nil {
+		if err := sendKeysFn(sessionTarget(sessionName, windowName), buildAgentCommand(root, sessionName, cfg, &updated, resolvedModel)); err != nil {
 			return err
 		}
 	}
@@ -474,8 +496,76 @@ func resolveBaseStartPoint(root, baseBranch string) (string, error) {
 	return "", fmt.Errorf("configured main branch %q not found locally or at origin/%s", baseBranch, baseBranch)
 }
 
-func buildAgentCommand(cfg *config.Config, item *work.Item, resolvedModel string) string {
-	parts := []string{shellEscape(cfg.Agent.Command)}
+func syncOpencodeDir(root, worktreePath string) error {
+	srcRoot := filepath.Join(root, ".opencode")
+	info, err := os.Stat(srcRoot)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	dstRoot := filepath.Join(worktreePath, ".opencode")
+	return copyDirContents(srcRoot, dstRoot)
+}
+
+func copyDirContents(srcRoot, dstRoot string) error {
+	entries, err := os.ReadDir(srcRoot)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dstRoot, 0755); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "node_modules" {
+			continue
+		}
+		srcPath := filepath.Join(srcRoot, name)
+		dstPath := filepath.Join(dstRoot, name)
+		if entry.IsDir() {
+			if err := copyDirContents(srcPath, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := copyFile(srcPath, dstPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(srcPath, dstPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		return err
+	}
+	info, err := src.Stat()
+	if err != nil {
+		return err
+	}
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode())
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, src); err != nil {
+		return err
+	}
+	return nil
+}
+
+func buildAgentCommand(root, sessionName string, cfg *config.Config, item *work.Item, resolvedModel string) string {
+	parts := []string{notify.EnvAssignment(root, sessionName), shellEscape(cfg.Agent.Command)}
 	prompt := strings.ReplaceAll(cfg.Agent.Prompt, "{id}", item.PaddedID())
 	prompt = strings.ReplaceAll(prompt, "{title}", item.Title)
 	prompt = strings.ReplaceAll(prompt, "{branch}", item.Branch)
@@ -487,6 +577,50 @@ func buildAgentCommand(cfg *config.Config, item *work.Item, resolvedModel string
 		parts = append(parts, shellEscape(arg))
 	}
 	return strings.Join(parts, " ")
+}
+
+func runNotify(args []string) error {
+	fs := flag.NewFlagSet("notify", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	var eventName, title, message, taskID, branch, modelName string
+	fs.StringVar(&eventName, "event", "", "notification event")
+	fs.StringVar(&title, "title", "", "notification title")
+	fs.StringVar(&message, "message", "", "notification message")
+	fs.StringVar(&taskID, "task", "", "task id")
+	fs.StringVar(&branch, "branch", "", "branch name")
+	fs.StringVar(&modelName, "model", "", "model name")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(eventName) == "" {
+		return fmt.Errorf("usage: conduct notify --event EVENT [--title TITLE] [--message MESSAGE]")
+	}
+
+	root := notify.EnvRoot()
+	if root == "" {
+		var err error
+		root, err = repoRoot()
+		if err != nil {
+			return err
+		}
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	sessionName := notify.EnvSession()
+	if sessionName == "" {
+		sessionName = projectSessionName(root, cfg)
+	}
+	return notify.Dispatch(root, sessionName, cfg, notify.Event{
+		Name:    eventName,
+		TaskID:  taskID,
+		Title:   title,
+		Message: message,
+		Branch:  branch,
+		Model:   modelName,
+		Time:    time.Now(),
+	})
 }
 
 func shellEscape(value string) string {
@@ -718,6 +852,18 @@ func runDoctor() error {
 		fmt.Println("layout: ok")
 	} else {
 		fmt.Printf("layout: missing (%s)\n", strings.Join(missing, ", "))
+	}
+	pluginPath := filepath.Join(root, ".opencode", "plugins", "conductor-notify.js")
+	if info, err := os.Stat(pluginPath); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("opencode plugin: missing (%s)\n", pluginPath)
+		} else {
+			fmt.Printf("opencode plugin: error (%v)\n", err)
+		}
+	} else if info.IsDir() {
+		fmt.Printf("opencode plugin: invalid (%s is a directory)\n", pluginPath)
+	} else {
+		fmt.Printf("opencode plugin: ok (%s)\n", pluginPath)
 	}
 	return nil
 }
@@ -1123,6 +1269,7 @@ Usage:
   conduct edit <id>
   conduct start <id> [--model MODEL]
   conduct open <id>
+  conduct notify --event EVENT [--title TITLE] [--message MESSAGE]
   conduct land <id>
   conduct drop <id>
   conduct status
@@ -1135,6 +1282,7 @@ Notes:
 	- conduct new opens your editor for a new work item.
 	- conduct new -t ... creates a title-only work item.
 	- Work only starts with --start or conduct start <id>.
+	- conduct notify is intended as a command target for OpenCode notification plugins.
 `)
 }
 

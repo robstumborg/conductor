@@ -56,6 +56,12 @@ model
 .B conduct open
 .I id
 .br
+.B conduct notify
+[
+.B \-\-event
+event
+]
+.br
 .B conduct land
 .I id
 .br
@@ -127,6 +133,10 @@ Otherwise it opens the tmux target.
 Open the tmux window for an active work item.
 The window must already exist.
 .TP
+.B notify
+Append a notification event to conductor's log and route it to the configured sinks.
+This is intended for use from conductor's project-local OpenCode plugin.
+.TP
 .B land
 .I id
 Squash-merge the task branch into the configured main branch, archive the work item, and remove the task worktree and branch.
@@ -195,6 +205,24 @@ This option may be provided more than once.
 .B \-\-model
 Override the model used for this start operation.
 If set, this value takes precedence over the work item model and the configured default model.
+.SS conduct notify
+.TP
+.B \-\-event
+Notification event name such as
+.BR question ,
+.BR permission ,
+.BR idle ,
+or
+.BR error .
+.TP
+.B \-\-title
+Optional notification title.
+.TP
+.B \-\-message
+Optional notification message.
+.TP
+.B \-\-task
+Optional task identifier to include in the notification log.
 .SH WORKFLOW
 .TP
 1.
@@ -252,6 +280,9 @@ Task worktrees.
 .I .conduct/current.md
 Runtime copy of the current assignment written inside a task worktree.
 Do not include this file in commits.
+.TP
+.I .conduct/notifications.log
+Notification log tailed in the tmux podium window when notifications are enabled.
 .SH ENVIRONMENT
 .TP
 .B EDITOR
@@ -268,6 +299,12 @@ is unset, conduct uses
 .TP
 .B TMUX
 If set, conduct assumes it is already running inside tmux and starts task windows in the background instead of attaching immediately.
+.TP
+.B CONDUCT_ROOT
+Injected into agent sessions started by conductor so notification commands can route back to the project root.
+.TP
+.B CONDUCT_SESSION_NAME
+Injected into agent sessions started by conductor so notification commands can target the correct tmux session.
 .SH EXIT STATUS
 .B conduct
 returns 0 on success and non-zero on error.

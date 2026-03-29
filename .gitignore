@@ -19,3 +19,4 @@ Thumbs.db
 # conductor runtime
 .conduct/current.md
 .conduct/worktrees/
+.conduct/notifications.log

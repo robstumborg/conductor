@@ -45,6 +45,15 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Agent.DefaultModel == "" {
 		t.Fatal("expected default model")
 	}
+	if !cfg.Notifications.EnabledValue() {
+		t.Fatal("expected notifications enabled by default")
+	}
+	if cfg.Notifications.LogPath == "" {
+		t.Fatal("expected notification log path")
+	}
+	if !cfg.Notifications.Tmux.EnabledValue() {
+		t.Fatal("expected tmux notifications enabled by default")
+	}
 }
 
 func TestEnsureRootGitignorePreservesExistingEntries(t *testing.T) {
@@ -93,5 +102,30 @@ func TestMissingLayout(t *testing.T) {
 	}
 	if len(missing) != 0 {
 		t.Fatalf("expected complete layout, got %v", missing)
+	}
+}
+
+func TestLoadBackfillsNotificationDefaults(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ConductDir), 0755); err != nil {
+		t.Fatal(err)
+	}
+	configData := []byte("project:\n  main_branch: main\nagent:\n  command: opencode\n")
+	if err := os.WriteFile(filepath.Join(root, ConfigPath), configData, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Notifications.EnabledValue() {
+		t.Fatal("expected notifications to default on when omitted")
+	}
+	if !cfg.Notifications.Tmux.EnabledValue() {
+		t.Fatal("expected tmux notifications to default on when omitted")
+	}
+	if cfg.Notifications.LogPath == "" {
+		t.Fatal("expected notification log path default")
 	}
 }

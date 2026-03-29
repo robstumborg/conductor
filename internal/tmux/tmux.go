@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -105,4 +106,60 @@ func ListSessions() ([]string, error) {
 		return nil, nil
 	}
 	return strings.Split(trimmed, "\n"), nil
+}
+
+func PaneTitleExists(target, title string) bool {
+	cmd := exec.Command("tmux", "list-panes", "-t", target, "-F", "#{pane_title}")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.TrimSpace(line) == title {
+			return true
+		}
+	}
+	return false
+}
+
+func EnsureTailPane(session, window, title, dir, logPath string, height int) error {
+	target := session + ":" + window
+	if PaneTitleExists(target, title) {
+		return nil
+	}
+	if height <= 0 {
+		height = 12
+	}
+	command := fmt.Sprintf("touch %s && exec tail -n 200 -F %s", shellEscape(logPath), shellEscape(logPath))
+	cmd := exec.Command(
+		"tmux", "split-window", "-d", "-v", "-t", target,
+		"-l", strconv.Itoa(height),
+		"-c", dir,
+		"-P", "-F", "#{pane_id}",
+		"sh", "-lc", command,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux split-window failed: %s", strings.TrimSpace(string(out)))
+	}
+	paneID := strings.TrimSpace(string(out))
+	if paneID == "" {
+		return fmt.Errorf("tmux split-window did not return a pane id")
+	}
+	cmd = exec.Command("tmux", "select-pane", "-t", paneID, "-T", title)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux select-pane failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func shellEscape(value string) string {
+	if value == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(value, " \t\n\"'$&()<>;|*?{}[]`!#~") {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
