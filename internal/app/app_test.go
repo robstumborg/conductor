@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/robstumborg/conductor/internal/config"
+	"github.com/robstumborg/conductor/internal/git"
 	"github.com/robstumborg/conductor/internal/notify"
 	"github.com/robstumborg/conductor/internal/work"
 )
@@ -746,6 +747,222 @@ func TestRunWorkStartValidatesAgentOverride(t *testing.T) {
 	err := runWorkStart("1", []string{"--agent", "missing"})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err=%v want=%v", err, wantErr)
+	}
+}
+
+func TestDropConfirmationMessageWarnsForDirtyAheadWork(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{Title: "Risky task"})
+	item.EnsureBranch()
+	if err := os.MkdirAll(filepath.Join(root, config.WorktreesDir, item.WorktreeDir()), 0755); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origIsClean := isCleanFn
+	origHasCommitsAhead := hasCommitsAheadFn
+	defer func() {
+		isCleanFn = origIsClean
+		hasCommitsAheadFn = origHasCommitsAhead
+	}()
+
+	isCleanFn = func(string) (bool, []git.FileStatus, error) {
+		return false, []git.FileStatus{{XY: " M", Path: "notes.txt"}}, nil
+	}
+	hasCommitsAheadFn = func(string, string, string) (bool, error) { return true, nil }
+
+	message, err := dropConfirmationMessage(root, cfg, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(message, "WARNING: dropping work item 1 (Risky task) will permanently remove local task state.") {
+		t.Fatalf("missing warning in %q", message)
+	}
+	if !strings.Contains(message, "Uncommitted changes will be lost:  M notes.txt.") {
+		t.Fatalf("missing dirty status in %q", message)
+	}
+	if !strings.Contains(message, "has commits ahead of main that will be deleted") {
+		t.Fatalf("missing ahead warning in %q", message)
+	}
+	if !strings.Contains(message, "Continue anyway?") {
+		t.Fatalf("missing continue prompt in %q", message)
+	}
+}
+
+func TestRunWorkDropPromptsBeforeRiskyCleanup(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{Title: "Risky task"})
+	item.EnsureBranch()
+	if err := work.Save(root, item, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, config.WorktreesDir, item.WorktreeDir()), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	origRepoRoot := repoRootFn
+	origConfirmPrompt := confirmPromptFn
+	origIsClean := isCleanFn
+	origHasCommitsAhead := hasCommitsAheadFn
+	defer func() {
+		repoRootFn = origRepoRoot
+		confirmPromptFn = origConfirmPrompt
+		isCleanFn = origIsClean
+		hasCommitsAheadFn = origHasCommitsAhead
+	}()
+
+	repoRootFn = func() (string, error) { return root, nil }
+	isCleanFn = func(string) (bool, []git.FileStatus, error) {
+		return false, []git.FileStatus{{XY: " M", Path: "notes.txt"}}, nil
+	}
+	hasCommitsAheadFn = func(string, string, string) (bool, error) { return true, nil }
+
+	var prompt string
+	var defaultYes bool
+	confirmPromptFn = func(message string, yes bool) bool {
+		prompt = message
+		defaultYes = yes
+		return false
+	}
+
+	if err := runWorkDrop("1"); err != nil {
+		t.Fatal(err)
+	}
+	if !defaultYes {
+		t.Fatal("expected risky drop prompt to default to yes")
+	}
+	if !strings.Contains(prompt, "WARNING: dropping work item 1 (Risky task)") {
+		t.Fatalf("missing risky warning in %q", prompt)
+	}
+	if _, err := os.Stat(item.Path); err != nil {
+		t.Fatalf("expected active work item to remain after declined drop, got %v", err)
+	}
+}
+
+func TestRunWorkDropReturnsCleanupErrors(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{Title: "Cleanup task"})
+	item.EnsureBranch()
+	if err := work.Save(root, item, false); err != nil {
+		t.Fatal(err)
+	}
+
+	origRepoRoot := repoRootFn
+	origConfirmPrompt := confirmPromptFn
+	origIsClean := isCleanFn
+	origHasCommitsAhead := hasCommitsAheadFn
+	origKillWindow := killWindowFn
+	origCleanupRemoveWorktreeForce := cleanupRemoveWorktreeForceFn
+	origCleanupDeleteBranchForce := cleanupDeleteBranchForceFn
+	defer func() {
+		repoRootFn = origRepoRoot
+		confirmPromptFn = origConfirmPrompt
+		isCleanFn = origIsClean
+		hasCommitsAheadFn = origHasCommitsAhead
+		killWindowFn = origKillWindow
+		cleanupRemoveWorktreeForceFn = origCleanupRemoveWorktreeForce
+		cleanupDeleteBranchForceFn = origCleanupDeleteBranchForce
+	}()
+
+	repoRootFn = func() (string, error) { return root, nil }
+	confirmPromptFn = func(string, bool) bool { return true }
+	isCleanFn = func(string) (bool, []git.FileStatus, error) { return true, nil, nil }
+	hasCommitsAheadFn = func(string, string, string) (bool, error) { return false, nil }
+	killWindowFn = func(string) error { return errors.New("tmux failed") }
+	cleanupRemoveWorktreeForceFn = func(string, string) error { return nil }
+	cleanupDeleteBranchForceFn = func(string, string) error { return nil }
+
+	err := runWorkDrop("1")
+	if err == nil || !strings.Contains(err.Error(), "cleanup failed") || !strings.Contains(err.Error(), "tmux failed") {
+		t.Fatalf("expected cleanup error, got %v", err)
+	}
+	archivedPath := filepath.Join(root, config.ArchiveWorkDir, item.Filename())
+	if _, statErr := os.Stat(archivedPath); statErr != nil {
+		t.Fatalf("expected archived work item, got %v", statErr)
+	}
+}
+
+func TestCleanupWorkReturnsJoinedErrors(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{Title: "Cleanup task"})
+	item.EnsureBranch()
+
+	origKillWindow := killWindowFn
+	origCleanupRemoveWorktree := cleanupRemoveWorktreeFn
+	origCleanupDeleteBranch := cleanupDeleteBranchFn
+	defer func() {
+		killWindowFn = origKillWindow
+		cleanupRemoveWorktreeFn = origCleanupRemoveWorktree
+		cleanupDeleteBranchFn = origCleanupDeleteBranch
+	}()
+
+	killWindowFn = func(string) error { return errors.New("window failed") }
+	cleanupRemoveWorktreeFn = func(string, string) error { return errors.New("worktree failed") }
+	cleanupDeleteBranchFn = func(string, string) error { return errors.New("branch failed") }
+
+	err := cleanupWork(root, item, cleanupOptions{})
+	if err == nil {
+		t.Fatal("expected cleanup error")
+	}
+	for _, want := range []string{"window failed", "worktree failed", "branch failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected %q in %v", want, err)
+		}
+	}
+}
+
+func TestConfirmPromptDefaultYesAcceptsEnter(t *testing.T) {
+	origStdin := os.Stdin
+	origStdout := os.Stdout
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = inR
+	os.Stdout = outW
+	defer func() {
+		os.Stdin = origStdin
+		os.Stdout = origStdout
+	}()
+
+	if _, err := inW.WriteString("\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := inW.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !confirmPrompt("Continue?", true) {
+		t.Fatal("expected empty input to accept default-yes prompt")
+	}
+	if err := outW.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(outR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "[Y/n]:") {
+		t.Fatalf("expected Y/n prompt, got %q", string(data))
 	}
 }
 

@@ -33,9 +33,15 @@ var ensureLayoutFn = config.EnsureLayout
 var branchExistsFn = git.BranchExists
 var refExistsFn = git.RefExists
 var createWorktreeFn = git.CreateWorktree
-var removeWorktreeFn = git.RemoveWorktree
-var deleteBranchFn = git.DeleteBranch
+var removeWorktreeFn = git.RemoveWorktreeForce
+var deleteBranchFn = git.DeleteBranchForce
+var cleanupRemoveWorktreeFn = git.RemoveWorktree
+var cleanupRemoveWorktreeForceFn = git.RemoveWorktreeForce
+var cleanupDeleteBranchFn = git.DeleteBranch
+var cleanupDeleteBranchForceFn = git.DeleteBranchForce
 var ensureLocalExcludesFn = git.EnsureLocalExcludes
+var isCleanFn = git.IsClean
+var hasCommitsAheadFn = git.HasCommitsAhead
 var sessionExistsFn = tmux.SessionExists
 var createSessionFn = tmux.CreateSession
 var windowExistsFn = tmux.WindowExists
@@ -50,6 +56,7 @@ var openEditorFn = editor.Open
 var agentpkgValidate = agentpkg.ValidateAvailable
 var modelpkgValidate = model.ValidateAvailable
 var notifyDispatchFn = notify.Dispatch
+var confirmPromptFn = confirmPrompt
 
 type stringList []string
 
@@ -706,14 +713,14 @@ func runWorkLand(id string) error {
 		return fmt.Errorf("must land from configured main branch %q (currently on %s)", cfg.Project.MainBranch, branch)
 	}
 	worktreePath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir())
-	clean, status, err := git.IsClean(worktreePath)
+	clean, status, err := isCleanFn(worktreePath)
 	if err != nil {
 		return fmt.Errorf("failed to inspect task worktree: %w", err)
 	}
 	if !clean {
 		return fmt.Errorf("cannot land work %s: task worktree has uncommitted changes (%s)", item.PaddedID(), summarizeStatuses(status))
 	}
-	hasCommits, err := git.HasCommitsAhead(root, cfg.Project.MainBranch, item.Branch)
+	hasCommits, err := hasCommitsAheadFn(root, cfg.Project.MainBranch, item.Branch)
 	if err != nil {
 		return fmt.Errorf("failed to compare %s against %s: %w", item.Branch, cfg.Project.MainBranch, err)
 	}
@@ -736,7 +743,9 @@ func runWorkLand(id string) error {
 	if err := work.Archive(root, item); err != nil {
 		return err
 	}
-	cleanupWork(root, item)
+	if err := cleanupWork(root, item, cleanupOptions{forceBranchDelete: true}); err != nil {
+		return err
+	}
 	fmt.Printf("Landed %s\n", item.Title)
 	fmt.Println("Squash merge applied. Review and commit the resulting changes.")
 	return nil
@@ -751,26 +760,63 @@ func runWorkDrop(id string) error {
 	if err != nil {
 		return err
 	}
-	if !confirm(fmt.Sprintf("Drop work item %d (%s)?", item.ID, item.Title)) {
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	message, err := dropConfirmationMessage(root, cfg, item)
+	if err != nil {
+		return err
+	}
+	if !confirmPromptFn(message, true) {
 		return nil
 	}
 	item.Status = "dropped"
 	if err := work.Archive(root, item); err != nil {
 		return err
 	}
-	cleanupWork(root, item)
+	if err := cleanupWork(root, item, cleanupOptions{forceWorktreeRemove: true, forceBranchDelete: true}); err != nil {
+		return err
+	}
 	fmt.Printf("Dropped %s\n", item.Title)
 	return nil
 }
 
-func cleanupWork(root string, item *work.Item) {
+type cleanupOptions struct {
+	forceWorktreeRemove bool
+	forceBranchDelete   bool
+}
+
+func cleanupWork(root string, item *work.Item, opts cleanupOptions) error {
+	var errs []error
 	if cfg, err := config.Load(root); err == nil {
-		_ = killWindowFn(sessionTarget(projectSessionName(root, cfg), item.WindowName()))
+		if err := killWindowFn(sessionTarget(projectSessionName(root, cfg), item.WindowName())); err != nil {
+			errs = append(errs, err)
+		}
+	} else {
+		errs = append(errs, err)
 	}
-	_ = removeWorktreeFn(root, filepath.Join(root, config.WorktreesDir, item.WorktreeDir()))
+	worktreePath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir())
+	removeWorktree := cleanupRemoveWorktreeFn
+	if opts.forceWorktreeRemove {
+		removeWorktree = cleanupRemoveWorktreeForceFn
+	}
+	if err := removeWorktree(root, worktreePath); err != nil {
+		errs = append(errs, err)
+	}
 	if item.Branch != "" {
-		_ = deleteBranchFn(root, item.Branch)
+		deleteBranch := cleanupDeleteBranchFn
+		if opts.forceBranchDelete {
+			deleteBranch = cleanupDeleteBranchForceFn
+		}
+		if err := deleteBranch(root, item.Branch); err != nil {
+			errs = append(errs, err)
+		}
 	}
+	if len(errs) > 0 {
+		return fmt.Errorf("cleanup failed: %w", errors.Join(errs...))
+	}
+	return nil
 }
 
 func syncCurrent(root string, item *work.Item) error {
@@ -1274,11 +1320,45 @@ func slugify(value string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-func confirm(prompt string) bool {
-	fmt.Printf("%s [y/N]: ", prompt)
+func dropConfirmationMessage(root string, cfg *config.Config, item *work.Item) (string, error) {
+	worktreePath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir())
+	clean, status, err := isCleanFn(worktreePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to inspect task worktree: %w", err)
+	}
+	hasCommits := false
+	if item.Branch != "" {
+		hasCommits, err = hasCommitsAheadFn(root, cfg.Project.MainBranch, item.Branch)
+		if err != nil {
+			return "", fmt.Errorf("failed to compare %s against %s: %w", item.Branch, cfg.Project.MainBranch, err)
+		}
+	}
+	if clean && !hasCommits {
+		return fmt.Sprintf("Drop work item %d (%s)?", item.ID, item.Title), nil
+	}
+	warnings := []string{fmt.Sprintf("WARNING: dropping work item %d (%s) will permanently remove local task state.", item.ID, item.Title)}
+	if !clean {
+		warnings = append(warnings, fmt.Sprintf("Uncommitted changes will be lost: %s.", summarizeStatuses(status)))
+	}
+	if hasCommits {
+		warnings = append(warnings, fmt.Sprintf("Branch %s has commits ahead of %s that will be deleted.", item.Branch, cfg.Project.MainBranch))
+	}
+	warnings = append(warnings, "Continue anyway?")
+	return strings.Join(warnings, "\n"), nil
+}
+
+func confirmPrompt(prompt string, defaultYes bool) bool {
+	suffix := "[y/N]"
+	if defaultYes {
+		suffix = "[Y/n]"
+	}
+	fmt.Printf("%s %s: ", prompt, suffix)
 	var value string
 	_, _ = fmt.Scanln(&value)
 	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return defaultYes
+	}
 	return value == "y" || value == "yes"
 }
 

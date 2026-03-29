@@ -86,7 +86,7 @@ func CreateWorktree(root, path, branch, startPoint string, createBranch bool) er
 }
 
 func RemoveWorktree(root, path string) error {
-	cmd := exec.Command("git", "worktree", "remove", path, "--force")
+	cmd := exec.Command("git", "worktree", "remove", path)
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -95,12 +95,32 @@ func RemoveWorktree(root, path string) error {
 	return nil
 }
 
+func RemoveWorktreeForce(root, path string) error {
+	cmd := exec.Command("git", "worktree", "remove", path, "--force")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git worktree remove --force failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func DeleteBranch(root, branch string) error {
-	cmd := exec.Command("git", "branch", "-D", branch)
+	cmd := exec.Command("git", "branch", "-d", branch)
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git branch delete failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func DeleteBranchForce(root, branch string) error {
+	cmd := exec.Command("git", "branch", "-D", branch)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git branch delete -D failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
 }
