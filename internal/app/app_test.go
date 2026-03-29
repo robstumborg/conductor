@@ -535,6 +535,105 @@ func TestSyncCurrentRejectsInvalidCurrentFile(t *testing.T) {
 	}
 }
 
+func TestSyncCurrentRejectsBranchMismatch(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{Title: "Valid title"})
+	item.EnsureBranch()
+	if err := work.Save(root, item, false); err != nil {
+		t.Fatal(err)
+	}
+
+	currentPath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir(), config.CurrentWorkPath)
+	if err := os.MkdirAll(filepath.Dir(currentPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	tampered := "---\nid: 1\ntitle: Valid title\nstatus: in-progress\nbranch: conduct/9999-other\ncreated_at: \"2026-03-29T00:00:00Z\"\nupdated_at: \"2026-03-29T00:00:00Z\"\n---\n\n## Description\n"
+	if err := os.WriteFile(currentPath, []byte(tampered), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := syncCurrent(root, item)
+	if err == nil || !strings.Contains(err.Error(), "branch mismatch") {
+		t.Fatalf("expected branch mismatch error, got %v", err)
+	}
+}
+
+func TestSyncCurrentOnlyAppliesEditableFields(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{Title: "Original title"})
+	item.Status = "in-progress"
+	item.Model = "openai/gpt-5.4"
+	item.Scope = []string{"old scope"}
+	item.Accept = []string{"old accept"}
+	item.Constraints = []string{"old constraint"}
+	item.Body = "## Description\n\nOld body\n"
+	item.EnsureBranch()
+	if err := work.Save(root, item, false); err != nil {
+		t.Fatal(err)
+	}
+
+	currentPath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir(), config.CurrentWorkPath)
+	if err := os.MkdirAll(filepath.Dir(currentPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	updated := "---\nid: 1\ntitle: Changed title\nstatus: landed\nmodel: anthropic/claude\nbranch: " + item.Branch + "\nscope:\n  - new scope\naccept:\n  - new accept\nconstraints:\n  - new constraint\ncreated_at: \"2026-03-29T00:00:00Z\"\nupdated_at: \"2026-03-29T00:00:00Z\"\n---\n\n## Description\n\nNew body\n"
+	if err := os.WriteFile(currentPath, []byte(updated), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := syncCurrent(root, item); err != nil {
+		t.Fatal(err)
+	}
+
+	if item.Title != "Original title" {
+		t.Fatalf("title=%q want original", item.Title)
+	}
+	if item.Status != "in-progress" {
+		t.Fatalf("status=%q want in-progress", item.Status)
+	}
+	if item.Model != "openai/gpt-5.4" {
+		t.Fatalf("model=%q want original", item.Model)
+	}
+	if item.Branch == "conduct/9999-other" || item.Branch == "" {
+		t.Fatalf("branch=%q want original branch", item.Branch)
+	}
+	if !reflect.DeepEqual(item.Scope, []string{"new scope"}) {
+		t.Fatalf("scope=%v", item.Scope)
+	}
+	if !reflect.DeepEqual(item.Accept, []string{"new accept"}) {
+		t.Fatalf("accept=%v", item.Accept)
+	}
+	if !reflect.DeepEqual(item.Constraints, []string{"new constraint"}) {
+		t.Fatalf("constraints=%v", item.Constraints)
+	}
+	if !strings.Contains(item.Body, "New body") {
+		t.Fatalf("body=%q", item.Body)
+	}
+
+	saved, err := work.Parse(item.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Title != "Original title" {
+		t.Fatalf("saved title=%q want original", saved.Title)
+	}
+	if saved.Status != "in-progress" {
+		t.Fatalf("saved status=%q want in-progress", saved.Status)
+	}
+	if saved.Model != "openai/gpt-5.4" {
+		t.Fatalf("saved model=%q want original", saved.Model)
+	}
+	if saved.Branch != item.Branch {
+		t.Fatalf("saved branch=%q want %q", saved.Branch, item.Branch)
+	}
+}
+
 func TestCompleteArgsRootCommandSuggestions(t *testing.T) {
 	got := completeArgs([]string{"st"})
 	want := []string{"start", "status"}

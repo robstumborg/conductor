@@ -789,17 +789,23 @@ func syncCurrent(root string, item *work.Item) error {
 	if err := synced.Validate(); err != nil {
 		return fmt.Errorf("invalid current work file: %w", err)
 	}
-	if err := os.WriteFile(item.Path, data, 0644); err != nil {
-		return err
+	if synced.ID != item.ID {
+		return fmt.Errorf("invalid current work file: id mismatch (%d != %d)", synced.ID, item.ID)
+	}
+	if synced.Branch != "" && synced.Branch != item.Branch {
+		return fmt.Errorf("invalid current work file: branch mismatch (%q != %q)", synced.Branch, item.Branch)
 	}
 	item.Body = synced.Body
 	item.Accept = synced.Accept
 	item.Constraints = synced.Constraints
 	item.Scope = synced.Scope
-	item.Model = synced.Model
-	item.Title = synced.Title
-	item.Status = synced.Status
-	item.Branch = synced.Branch
+	data, err = item.Marshal()
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(item.Path, data, 0644); err != nil {
+		return err
+	}
 	return nil
 }
 
