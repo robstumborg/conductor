@@ -28,12 +28,15 @@ func TestFormatLine(t *testing.T) {
 }
 
 func TestEnvAssignment(t *testing.T) {
-	got := EnvAssignment("/tmp/root dir", "conduct-project")
+	got := EnvAssignment("/tmp/root dir", "conduct-project", "0007")
 	if !strings.Contains(got, "CONDUCT_ROOT='/tmp/root dir'") {
 		t.Fatalf("root missing from %q", got)
 	}
 	if !strings.Contains(got, "CONDUCT_SESSION_NAME=conduct-project") {
 		t.Fatalf("session missing from %q", got)
+	}
+	if !strings.Contains(got, "CONDUCT_TASK_ID=0007") {
+		t.Fatalf("task id missing from %q", got)
 	}
 }
 

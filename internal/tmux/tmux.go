@@ -48,6 +48,15 @@ func CreateWindow(session, window, dir string) error {
 	return nil
 }
 
+func RenameWindow(target, name string) error {
+	cmd := exec.Command("tmux", "rename-window", "-t", target, name)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux rename-window failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func SendKeys(name, value string) error {
 	cmd := exec.Command("tmux", "send-keys", "-t", name, value, "C-m")
 	out, err := cmd.CombinedOutput()

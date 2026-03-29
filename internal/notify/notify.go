@@ -92,8 +92,13 @@ func EnvSession() string {
 	return strings.TrimSpace(os.Getenv("CONDUCT_SESSION_NAME"))
 }
 
-func EnvAssignment(root, session string) string {
-	return fmt.Sprintf("env CONDUCT_ROOT=%s CONDUCT_SESSION_NAME=%s", shellEscape(root), shellEscape(session))
+func EnvAssignment(root, session, taskID string) string {
+	return fmt.Sprintf(
+		"env CONDUCT_ROOT=%s CONDUCT_SESSION_NAME=%s CONDUCT_TASK_ID=%s",
+		shellEscape(root),
+		shellEscape(session),
+		shellEscape(taskID),
+	)
 }
 
 func shellEscape(value string) string {

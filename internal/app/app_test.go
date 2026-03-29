@@ -71,6 +71,9 @@ func TestBuildAgentCommandIncludesConductEnv(t *testing.T) {
 	if !strings.Contains(cmd, "CONDUCT_SESSION_NAME=conduct-project") {
 		t.Fatalf("expected session name in %q", cmd)
 	}
+	if !strings.Contains(cmd, "CONDUCT_TASK_ID=0001") {
+		t.Fatalf("expected task id in %q", cmd)
+	}
 	if !strings.Contains(cmd, "opencode") {
 		t.Fatalf("expected agent command in %q", cmd)
 	}
@@ -109,6 +112,276 @@ func TestRunNotifyWritesNotificationLog(t *testing.T) {
 	contents := string(data)
 	if !strings.Contains(contents, "question") || !strings.Contains(contents, "Need an answer") || !strings.Contains(contents, "task=0001") {
 		t.Fatalf("unexpected notification log contents %q", contents)
+	}
+}
+
+func TestRunNotifyAppliesDerivedTitle(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{InsertBody: true})
+	item.Body = "## Description\n\nDerive the title from this task.\n"
+	item.EnsureBranch()
+	if err := work.Save(root, item, false); err != nil {
+		t.Fatal(err)
+	}
+
+	currentPath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir(), config.CurrentWorkPath)
+	if err := os.MkdirAll(filepath.Dir(currentPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := item.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(currentPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	origRepoRoot := repoRootFn
+	origSessionExists := sessionExistsFn
+	origWindowExists := windowExistsFn
+	origRenameWindow := renameWindowFn
+	defer func() {
+		repoRootFn = origRepoRoot
+		sessionExistsFn = origSessionExists
+		windowExistsFn = origWindowExists
+		renameWindowFn = origRenameWindow
+		_ = os.Unsetenv("CONDUCT_ROOT")
+		_ = os.Unsetenv("CONDUCT_SESSION_NAME")
+	}()
+
+	repoRootFn = func() (string, error) { return root, nil }
+	sessionExistsFn = func(string) bool { return true }
+	windowExistsFn = func(session, window string) bool {
+		return session == "conduct-project" && window == "0001-work-0001"
+	}
+	renamedTarget := ""
+	renamedName := ""
+	renameWindowFn = func(target, name string) error {
+		renamedTarget = target
+		renamedName = name
+		return nil
+	}
+	if err := os.Setenv("CONDUCT_ROOT", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv("CONDUCT_SESSION_NAME", "conduct-project"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runNotify([]string{"--event", "title-derived", "--task", "0001", "--title", "Derived task title"}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := work.FindActive(root, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Derived task title" {
+		t.Fatalf("title=%q", updated.Title)
+	}
+	if filepath.Base(updated.Path) != "0001-derived-task-title.md" {
+		t.Fatalf("path=%q", updated.Path)
+	}
+	if _, err := os.Stat(filepath.Join(root, config.ActiveWorkDir, "0001-work-0001.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected old file removed, got %v", err)
+	}
+	currentItem, err := work.Parse(currentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentItem.Title != "Derived task title" {
+		t.Fatalf("current title=%q", currentItem.Title)
+	}
+	if renamedTarget != "conduct-project:0001-work-0001" {
+		t.Fatalf("renamed target=%q", renamedTarget)
+	}
+	if renamedName != "0001-derived-task-title" {
+		t.Fatalf("renamed name=%q", renamedName)
+	}
+	logData, err := os.ReadFile(filepath.Join(root, config.ConductDir, "notifications.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logData), "title-derived") || !strings.Contains(string(logData), "Derived task title") {
+		t.Fatalf("unexpected log contents %q", string(logData))
+	}
+}
+
+func TestRunNotifyDoesNotOverwriteExplicitTitle(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{Title: "Explicit title", InsertBody: true})
+	item.EnsureBranch()
+	if err := work.Save(root, item, false); err != nil {
+		t.Fatal(err)
+	}
+
+	origRepoRoot := repoRootFn
+	origRenameWindow := renameWindowFn
+	defer func() {
+		repoRootFn = origRepoRoot
+		renameWindowFn = origRenameWindow
+		_ = os.Unsetenv("CONDUCT_ROOT")
+		_ = os.Unsetenv("CONDUCT_SESSION_NAME")
+	}()
+	repoRootFn = func() (string, error) { return root, nil }
+	renameCalled := false
+	renameWindowFn = func(string, string) error {
+		renameCalled = true
+		return nil
+	}
+	if err := os.Setenv("CONDUCT_ROOT", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv("CONDUCT_SESSION_NAME", "conduct-project"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runNotify([]string{"--event", "title-derived", "--task", "0001", "--title", "Replacement title"}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := work.FindActive(root, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Explicit title" {
+		t.Fatalf("title=%q", updated.Title)
+	}
+	if renameCalled {
+		t.Fatal("expected rename window to be skipped")
+	}
+}
+
+func TestRunNotifyAppliesDerivedTitleWhenCurrentUpdateFails(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{InsertBody: true})
+	item.Body = "## Description\n\nDerive the title from this task.\n"
+	item.EnsureBranch()
+	if err := work.Save(root, item, false); err != nil {
+		t.Fatal(err)
+	}
+
+	currentPath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir(), config.CurrentWorkPath)
+	if err := os.MkdirAll(filepath.Dir(currentPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(currentPath, []byte("not valid frontmatter\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	origRepoRoot := repoRootFn
+	defer func() {
+		repoRootFn = origRepoRoot
+		_ = os.Unsetenv("CONDUCT_ROOT")
+		_ = os.Unsetenv("CONDUCT_SESSION_NAME")
+	}()
+	repoRootFn = func() (string, error) { return root, nil }
+	if err := os.Setenv("CONDUCT_ROOT", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv("CONDUCT_SESSION_NAME", "conduct-project"); err != nil {
+		t.Fatal(err)
+	}
+
+	stderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	defer func() {
+		os.Stderr = stderr
+	}()
+
+	if err := runNotify([]string{"--event", "title-derived", "--task", "0001", "--title", "Derived task title"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	warning, _ := io.ReadAll(r)
+
+	updated, err := work.FindActive(root, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Derived task title" {
+		t.Fatalf("title=%q", updated.Title)
+	}
+	if !strings.Contains(string(warning), "failed to update current work title") {
+		t.Fatalf("warning=%q", string(warning))
+	}
+}
+
+func TestRunNotifyAppliesDerivedTitleWhenTmuxRenameFails(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{InsertBody: true})
+	item.Body = "## Description\n\nDerive the title from this task.\n"
+	item.EnsureBranch()
+	if err := work.Save(root, item, false); err != nil {
+		t.Fatal(err)
+	}
+
+	origRepoRoot := repoRootFn
+	origSessionExists := sessionExistsFn
+	origWindowExists := windowExistsFn
+	origRenameWindow := renameWindowFn
+	defer func() {
+		repoRootFn = origRepoRoot
+		sessionExistsFn = origSessionExists
+		windowExistsFn = origWindowExists
+		renameWindowFn = origRenameWindow
+		_ = os.Unsetenv("CONDUCT_ROOT")
+		_ = os.Unsetenv("CONDUCT_SESSION_NAME")
+	}()
+	repoRootFn = func() (string, error) { return root, nil }
+	sessionExistsFn = func(string) bool { return true }
+	windowExistsFn = func(session, window string) bool {
+		return session == "conduct-project" && window == "0001-work-0001"
+	}
+	renameWindowFn = func(string, string) error { return errors.New("tmux failed") }
+	if err := os.Setenv("CONDUCT_ROOT", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv("CONDUCT_SESSION_NAME", "conduct-project"); err != nil {
+		t.Fatal(err)
+	}
+
+	stderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	defer func() {
+		os.Stderr = stderr
+	}()
+
+	if err := runNotify([]string{"--event", "title-derived", "--task", "0001", "--title", "Derived task title"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	warning, _ := io.ReadAll(r)
+
+	updated, err := work.FindActive(root, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Derived task title" {
+		t.Fatalf("title=%q", updated.Title)
+	}
+	if !strings.Contains(string(warning), "failed to rename tmux window") {
+		t.Fatalf("warning=%q", string(warning))
 	}
 }
 

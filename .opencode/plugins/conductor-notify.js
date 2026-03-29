@@ -7,6 +7,7 @@ const sessionLastBusyAt = new Map()
 
 const recentPermissionNotifications = new Map()
 const recentQuestionNotifications = new Map()
+const recentDerivedTitles = new Map()
 
 function firstString(...values) {
   for (const value of values) {
@@ -165,6 +166,9 @@ async function getSessionInfo(client, sessionID) {
 
 async function runConductNotify(client, cwd, eventName, details) {
   const cmd = ["conduct", "notify", "--event", eventName]
+  if (details.taskID) {
+    cmd.push("--task", details.taskID)
+  }
   if (details.title) {
     cmd.push("--title", details.title)
   }
@@ -208,6 +212,29 @@ async function runConductNotify(client, cwd, eventName, details) {
       },
     })
   }
+}
+
+async function notifyDerivedTitle(client, cwd, sessionID) {
+  const taskID = firstString(Bun.env.CONDUCT_TASK_ID)
+  if (!sessionID || !taskID) {
+    return
+  }
+
+  const session = await getSessionInfo(client, sessionID)
+  if (session.isChild || !session.title) {
+    return
+  }
+
+  const lastTitle = recentDerivedTitles.get(sessionID)
+  if (lastTitle === session.title) {
+    return
+  }
+
+  await runConductNotify(client, cwd, "title-derived", {
+    taskID,
+    title: session.title,
+  })
+  recentDerivedTitles.set(sessionID, session.title)
 }
 
 async function notifyQuestion(client, cwd, sessionID, args, signature) {
@@ -288,7 +315,9 @@ export const ConductorNotifyPlugin = async ({ client, directory, worktree }) => 
       }
 
       if (event.type === "session.status" && event.properties?.status?.type === "busy") {
-        markSessionBusy(getSessionID(event))
+        const sessionID = getSessionID(event)
+        markSessionBusy(sessionID)
+        await notifyDerivedTitle(client, cwd, sessionID)
         return
       }
 
@@ -305,6 +334,7 @@ export const ConductorNotifyPlugin = async ({ client, directory, worktree }) => 
 
       if (event.type === "session.idle") {
         const sessionID = getSessionID(event)
+        await notifyDerivedTitle(client, cwd, sessionID)
         if (!sessionID) {
           await runConductNotify(client, cwd, "idle", {
             title: "OpenCode session idle",

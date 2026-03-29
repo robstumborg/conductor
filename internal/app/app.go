@@ -49,6 +49,7 @@ var sessionExistsFn = tmux.SessionExists
 var createSessionFn = tmux.CreateSession
 var windowExistsFn = tmux.WindowExists
 var createWindowFn = tmux.CreateWindow
+var renameWindowFn = tmux.RenameWindow
 var sendKeysFn = tmux.SendKeys
 var openTmuxFn = tmux.Open
 var killSessionFn = tmux.KillSession
@@ -636,7 +637,7 @@ func copyFile(srcPath, dstPath string) error {
 }
 
 func buildAgentCommand(root, sessionName string, cfg *config.Config, item *work.Item, resolvedAgent, resolvedModel string) string {
-	parts := []string{notify.EnvAssignment(root, sessionName), shellEscape(cfg.Agent.Command)}
+	parts := []string{notify.EnvAssignment(root, sessionName, item.PaddedID()), shellEscape(cfg.Agent.Command)}
 	prompt := strings.ReplaceAll(cfg.Agent.Prompt, "{id}", item.PaddedID())
 	prompt = strings.ReplaceAll(prompt, "{title}", item.Title)
 	prompt = strings.ReplaceAll(prompt, "{branch}", item.Branch)
@@ -684,6 +685,11 @@ func runNotify(args []string) error {
 	if sessionName == "" {
 		sessionName = projectSessionName(root, cfg)
 	}
+	if eventName == "title-derived" {
+		if err := applyDerivedTitle(root, sessionName, taskID, title); err != nil {
+			return err
+		}
+	}
 	return notify.Dispatch(root, sessionName, cfg, notify.Event{
 		Name:    eventName,
 		TaskID:  taskID,
@@ -693,6 +699,70 @@ func runNotify(args []string) error {
 		Model:   modelName,
 		Time:    time.Now(),
 	})
+}
+
+func applyDerivedTitle(root, sessionName, taskID, title string) error {
+	taskID = strings.TrimSpace(taskID)
+	title = strings.TrimSpace(title)
+	if taskID == "" || title == "" {
+		return nil
+	}
+
+	item, err := work.FindActive(root, taskID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return nil
+		}
+		return err
+	}
+	if strings.TrimSpace(item.Title) != "" {
+		return nil
+	}
+
+	oldPath := item.Path
+	oldWindowName := item.WindowName()
+	item.Title = title
+	item.Path = ""
+	if err := saveWorkFn(root, item, false); err != nil {
+		item.Path = oldPath
+		item.Title = ""
+		return err
+	}
+	if oldPath != "" && oldPath != item.Path {
+		_ = os.Remove(oldPath)
+	}
+
+	if err := updateCurrentWorkTitle(root, item); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to update current work title: %v\n", err)
+	}
+
+	newWindowName := item.WindowName()
+	if sessionExistsFn(sessionName) && oldWindowName != newWindowName && windowExistsFn(sessionName, oldWindowName) {
+		if err := renameWindowFn(sessionTarget(sessionName, oldWindowName), newWindowName); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to rename tmux window: %v\n", err)
+		}
+	}
+	return nil
+}
+
+func updateCurrentWorkTitle(root string, item *work.Item) error {
+	currentPath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir(), config.CurrentWorkPath)
+	if _, err := os.Stat(currentPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	currentItem, err := work.Parse(currentPath)
+	if err != nil {
+		return fmt.Errorf("invalid current work file: %w", err)
+	}
+	currentItem.Title = item.Title
+	data, err := currentItem.Marshal()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(currentPath, data, 0644)
 }
 
 func shellEscape(value string) string {
