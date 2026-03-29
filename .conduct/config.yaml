@@ -1,0 +1,13 @@
+project:
+    main_branch: master
+agent:
+    command: opencode
+    args:
+        - --model
+        - '{model}'
+        - --prompt
+        - '{prompt}'
+    default_model: openai/gpt-5.4
+    prompt: Open `.conduct/current.md` for your assignment. Complete the requested work in this worktree. If helpful, update `.conduct/current.md` with notes before stopping; conductor will sync those notes back into the durable work record later. Do not include `.conduct/current.md` in your final commit. When you are finished, stage and commit your actual task changes on this branch before stopping.
+tmux:
+    session_prefix: conduct
