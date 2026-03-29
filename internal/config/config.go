@@ -31,6 +31,7 @@ type ProjectConfig struct {
 type AgentConfig struct {
 	Command      string   `yaml:"command"`
 	Args         []string `yaml:"args"`
+	DefaultAgent string   `yaml:"default_agent"`
 	DefaultModel string   `yaml:"default_model"`
 	Prompt       string   `yaml:"prompt"`
 }
@@ -57,8 +58,10 @@ func Default() *Config {
 		Project: ProjectConfig{MainBranch: "main"},
 		Agent: AgentConfig{
 			Command:      "opencode",
+			DefaultAgent: "build",
 			DefaultModel: "openai/gpt-5.4",
 			Args: []string{
+				"--agent", "{agent}",
 				"--model", "{model}",
 				"--prompt", "{prompt}",
 			},
@@ -99,6 +102,9 @@ func Load(root string) (*Config, error) {
 	}
 	if cfg.Agent.Command == "" {
 		cfg.Agent.Command = defaults.Agent.Command
+	}
+	if cfg.Agent.DefaultAgent == "" {
+		cfg.Agent.DefaultAgent = defaults.Agent.DefaultAgent
 	}
 	if cfg.Agent.DefaultModel == "" {
 		cfg.Agent.DefaultModel = defaults.Agent.DefaultModel

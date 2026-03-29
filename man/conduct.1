@@ -16,6 +16,10 @@ conduct \- orchestrate AI-assisted work inside a git repository
 title
 ]
 [
+.B \-\-agent
+agent
+]
+[
 .B \-\-model
 model
 ]
@@ -48,6 +52,10 @@ scope
 .br
 .B conduct start
 .I id
+[
+.B \-\-agent
+agent
+]
 [
 .B \-\-model
 model
@@ -177,6 +185,10 @@ Print build metadata.
 Set the work item title.
 If omitted, conduct creates a draft file and opens the editor.
 .TP
+.B \-\-agent
+Set the initial OpenCode agent for the new work item.
+The value must match an agent available to the configured agent command.
+.TP
 .B \-\-model
 Set a model override for the new work item.
 The value must be in
@@ -201,6 +213,11 @@ This option may be provided more than once.
 Add a scope value.
 This option may be provided more than once.
 .SS conduct start
+.TP
+.B \-\-agent
+Override the initial OpenCode agent used for this start operation.
+If set, this value takes precedence over the work item agent and the configured default agent.
+This only affects session startup; the agent can still be changed later inside OpenCode.
 .TP
 .B \-\-model
 Override the model used for this start operation.

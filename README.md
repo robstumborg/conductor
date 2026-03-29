@@ -48,6 +48,12 @@ Create a task and start it right away:
 conduct new -t "Fix flaky tests" --start
 ```
 
+Start in a specific OpenCode agent:
+
+```bash
+conduct new -t "Review API changes" --agent plan --start
+```
+
 No title yet? Create a new draft and open in your editor:
 
 ```bash
@@ -131,10 +137,13 @@ project:
 agent:
   command: opencode
   args:
+    - --agent
+    - "{agent}"
     - --model
     - "{model}"
     - --prompt
     - "{prompt}"
+  default_agent: build
   default_model: openai/gpt-5.4
 tmux:
   session_prefix: conduct
@@ -145,8 +154,12 @@ notifications:
     enabled: true
     window: podium
     pane_title: conductor-notifications
-    height: 12
+  height: 12
 ```
+
+`--agent` and `default_agent` choose the initial OpenCode agent for a task session. This only affects startup; you can still switch agents later inside OpenCode.
+
+Conductor defers to OpenCode for agent definitions, including built-in agents like `build` and `plan`, global agents under `~/.config/opencode/agents/`, and project-local agents under `.opencode/agents/`.
 
 ## OpenCode notifications
 

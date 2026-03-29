@@ -48,6 +48,16 @@ func TestSaveAndParse(t *testing.T) {
 	if parsed.Body != item.Body {
 		t.Fatalf("body mismatch: %q != %q", parsed.Body, item.Body)
 	}
+	if parsed.Agent != item.Agent {
+		t.Fatalf("agent mismatch: %q != %q", parsed.Agent, item.Agent)
+	}
+}
+
+func TestNewTrimsAgent(t *testing.T) {
+	item := New(12, CreateOptions{Title: "Review backend code", Agent: "  plan  "})
+	if item.Agent != "plan" {
+		t.Fatalf("unexpected agent: %q", item.Agent)
+	}
 }
 
 func TestNextID(t *testing.T) {

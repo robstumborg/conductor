@@ -40,7 +40,7 @@ func TestRunStatusDoesNotCreateLayout(t *testing.T) {
 }
 
 func TestBuildAgentCommandIncludesConductEnv(t *testing.T) {
-	cmd := buildAgentCommand("/tmp/repo root", "conduct-project", config.Default(), work.New(1, work.CreateOptions{Title: "Test task"}), "openai/gpt-5.4")
+	cmd := buildAgentCommand("/tmp/repo root", "conduct-project", config.Default(), work.New(1, work.CreateOptions{Title: "Test task"}), "build", "openai/gpt-5.4")
 	if !strings.Contains(cmd, "CONDUCT_ROOT='/tmp/repo root'") {
 		t.Fatalf("expected CONDUCT_ROOT in %q", cmd)
 	}
@@ -49,6 +49,9 @@ func TestBuildAgentCommandIncludesConductEnv(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "opencode") {
 		t.Fatalf("expected agent command in %q", cmd)
+	}
+	if !strings.Contains(cmd, "--agent build") {
+		t.Fatalf("expected agent flag in %q", cmd)
 	}
 }
 
@@ -181,18 +184,56 @@ func TestRunWorkCreateValidatesModelBeforeEditorFlow(t *testing.T) {
 
 	wantErr := errors.New("bad model")
 	origRepoRoot := repoRootFn
+	origAgentValidate := agentpkgValidate
 	origModelValidate := modelpkgValidate
 	defer func() {
 		repoRootFn = origRepoRoot
+		agentpkgValidate = origAgentValidate
 		modelpkgValidate = origModelValidate
 	}()
 
 	repoRootFn = func() (string, error) { return root, nil }
+	agentpkgValidate = func(string, string) error { return nil }
 	modelpkgValidate = func(string, string) error { return wantErr }
 
 	err := runWorkCreate([]string{"--model", "bad/model"})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err=%v want=%v", err, wantErr)
+	}
+}
+
+func TestRunWorkCreateDraftPrefillsDefaultAgentAndModel(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+
+	origRepoRoot := repoRootFn
+	origOpenEditor := openEditorFn
+	defer func() {
+		repoRootFn = origRepoRoot
+		openEditorFn = origOpenEditor
+	}()
+
+	repoRootFn = func() (string, error) { return root, nil }
+	openEditorFn = func(path string) error {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		contents := string(data)
+		if !strings.Contains(contents, "agent: build") {
+			t.Fatalf("expected default agent in draft, got %q", contents)
+		}
+		if !strings.Contains(contents, "model: openai/gpt-5.4") {
+			t.Fatalf("expected default model in draft, got %q", contents)
+		}
+		contents = strings.Replace(contents, "title: \"\"", "title: Draft task", 1)
+		return os.WriteFile(path, []byte(contents), 0644)
+	}
+
+	if err := runWorkCreate(nil); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -221,6 +262,7 @@ func TestStartWorkItemRollsBackOnWindowFailure(t *testing.T) {
 	origSendKeys := sendKeysFn
 	origOpenTmux := openTmuxFn
 	origSaveWork := saveWorkFn
+	origAgentValidate := agentpkgValidate
 	origModelValidate := modelpkgValidate
 	origNotifyDispatch := notifyDispatchFn
 	defer func() {
@@ -237,6 +279,7 @@ func TestStartWorkItemRollsBackOnWindowFailure(t *testing.T) {
 		sendKeysFn = origSendKeys
 		openTmuxFn = origOpenTmux
 		saveWorkFn = origSaveWork
+		agentpkgValidate = origAgentValidate
 		modelpkgValidate = origModelValidate
 		notifyDispatchFn = origNotifyDispatch
 	}()
@@ -265,9 +308,10 @@ func TestStartWorkItemRollsBackOnWindowFailure(t *testing.T) {
 		saved = true
 		return nil
 	}
+	agentpkgValidate = func(string, string) error { return nil }
 	modelpkgValidate = func(string, string) error { return nil }
 
-	err := startWorkItem(root, item, "")
+	err := startWorkItem(root, item, "", "")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err=%v want=%v", err, wantErr)
 	}
@@ -317,6 +361,7 @@ func TestStartWorkItemSyncsOpencodeIntoWorktree(t *testing.T) {
 	origSendKeys := sendKeysFn
 	origOpenTmux := openTmuxFn
 	origSaveWork := saveWorkFn
+	origAgentValidate := agentpkgValidate
 	origModelValidate := modelpkgValidate
 	defer func() {
 		branchExistsFn = origBranchExists
@@ -330,6 +375,7 @@ func TestStartWorkItemSyncsOpencodeIntoWorktree(t *testing.T) {
 		sendKeysFn = origSendKeys
 		openTmuxFn = origOpenTmux
 		saveWorkFn = origSaveWork
+		agentpkgValidate = origAgentValidate
 		modelpkgValidate = origModelValidate
 	}()
 
@@ -346,10 +392,11 @@ func TestStartWorkItemSyncsOpencodeIntoWorktree(t *testing.T) {
 	sendKeysFn = func(string, string) error { return nil }
 	openTmuxFn = func(string) error { return nil }
 	saveWorkFn = func(string, *work.Item, bool) error { return nil }
+	agentpkgValidate = func(string, string) error { return nil }
 	modelpkgValidate = func(string, string) error { return nil }
 	notifyDispatchFn = func(string, string, *config.Config, notify.Event) error { return nil }
 
-	if err := startWorkItem(root, item, ""); err != nil {
+	if err := startWorkItem(root, item, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	worktreePluginPath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir(), ".opencode", "plugins", "conductor-notify.js")
@@ -384,6 +431,7 @@ func TestStartWorkItemWarnsWhenNotificationSetupFails(t *testing.T) {
 	origSendKeys := sendKeysFn
 	origOpenTmux := openTmuxFn
 	origSaveWork := saveWorkFn
+	origAgentValidate := agentpkgValidate
 	origModelValidate := modelpkgValidate
 	origNotifyDispatch := notifyDispatchFn
 	defer func() {
@@ -398,6 +446,7 @@ func TestStartWorkItemWarnsWhenNotificationSetupFails(t *testing.T) {
 		sendKeysFn = origSendKeys
 		openTmuxFn = origOpenTmux
 		saveWorkFn = origSaveWork
+		agentpkgValidate = origAgentValidate
 		modelpkgValidate = origModelValidate
 		notifyDispatchFn = origNotifyDispatch
 	}()
@@ -421,6 +470,7 @@ func TestStartWorkItemWarnsWhenNotificationSetupFails(t *testing.T) {
 		saved = true
 		return nil
 	}
+	agentpkgValidate = func(string, string) error { return nil }
 	modelpkgValidate = func(string, string) error { return nil }
 	notifyDispatchFn = func(string, string, *config.Config, notify.Event) error { return wantErr }
 
@@ -434,7 +484,7 @@ func TestStartWorkItemWarnsWhenNotificationSetupFails(t *testing.T) {
 		os.Stderr = stderr
 	}()
 
-	if err := startWorkItem(root, item, ""); err != nil {
+	if err := startWorkItem(root, item, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Close(); err != nil {
@@ -503,7 +553,7 @@ func TestCompleteArgsNewFlags(t *testing.T) {
 
 func TestCompleteArgsNewFlagsPreferLongByDefault(t *testing.T) {
 	got := completeArgs([]string{"new", ""})
-	want := []string{"--accept", "--constraint", "--edit", "--model", "--scope", "--start", "--title"}
+	want := []string{"--accept", "--agent", "--constraint", "--edit", "--model", "--scope", "--start", "--title"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%v want=%v", got, want)
 	}
@@ -544,9 +594,59 @@ func TestCompleteArgsStartSuggestsActiveIDs(t *testing.T) {
 
 func TestCompleteArgsStartSuggestsFlagsAfterID(t *testing.T) {
 	got := completeArgs([]string{"start", "1", "--"})
-	want := []string{"--model"}
+	want := []string{"--agent", "--model"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%v want=%v", got, want)
+	}
+}
+
+func TestRunWorkCreateValidatesAgentBeforeEditorFlow(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+
+	wantErr := errors.New("bad agent")
+	origRepoRoot := repoRootFn
+	origAgentValidate := agentpkgValidate
+	defer func() {
+		repoRootFn = origRepoRoot
+		agentpkgValidate = origAgentValidate
+	}()
+
+	repoRootFn = func() (string, error) { return root, nil }
+	agentpkgValidate = func(string, string) error { return wantErr }
+
+	err := runWorkCreate([]string{"--agent", "bad-agent"})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err=%v want=%v", err, wantErr)
+	}
+}
+
+func TestRunWorkStartValidatesAgentOverride(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{Title: "Test task"})
+	if err := work.Save(root, item, false); err != nil {
+		t.Fatal(err)
+	}
+
+	wantErr := errors.New("bad agent")
+	origRepoRoot := repoRootFn
+	origAgentValidate := agentpkgValidate
+	defer func() {
+		repoRootFn = origRepoRoot
+		agentpkgValidate = origAgentValidate
+	}()
+
+	repoRootFn = func() (string, error) { return root, nil }
+	agentpkgValidate = func(string, string) error { return wantErr }
+
+	err := runWorkStart("1", []string{"--agent", "missing"})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err=%v want=%v", err, wantErr)
 	}
 }
 

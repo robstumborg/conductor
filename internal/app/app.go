@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	agentpkg "github.com/robstumborg/conductor/internal/agent"
 	"github.com/robstumborg/conductor/internal/config"
 	"github.com/robstumborg/conductor/internal/editor"
 	"github.com/robstumborg/conductor/internal/git"
@@ -45,6 +46,8 @@ var killSessionFn = tmux.KillSession
 var killWindowFn = tmux.KillWindow
 var listSessionsFn = tmux.ListSessions
 var saveWorkFn = work.Save
+var openEditorFn = editor.Open
+var agentpkgValidate = agentpkg.ValidateAvailable
 var modelpkgValidate = model.ValidateAvailable
 var notifyDispatchFn = notify.Dispatch
 
@@ -168,11 +171,12 @@ func runWorkCreate(args []string) error {
 
 	fs := flag.NewFlagSet("work", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	var title, model string
+	var title, agent, model string
 	var editFlag, startFlag bool
 	var accept, constraints, scope stringList
 	fs.StringVar(&title, "title", "", "work title")
 	fs.StringVar(&title, "t", "", "work title")
+	fs.StringVar(&agent, "agent", "", "initial agent override")
 	fs.StringVar(&model, "model", "", "model override")
 	fs.BoolVar(&editFlag, "edit", false, "open in editor before saving")
 	fs.BoolVar(&startFlag, "start", false, "start after creation")
@@ -189,6 +193,11 @@ func runWorkCreate(args []string) error {
 	if err != nil {
 		return err
 	}
+	if agent != "" {
+		if err := agentpkgValidate(cfg.Agent.Command, agent); err != nil {
+			return err
+		}
+	}
 	if model != "" {
 		if err := modelpkgValidate(cfg.Agent.Command, model); err != nil {
 			return err
@@ -203,6 +212,7 @@ func runWorkCreate(args []string) error {
 	insertBody := title == "" || editFlag
 	item := work.New(id, work.CreateOptions{
 		Title:       title,
+		Agent:       agent,
 		Model:       model,
 		Scope:       scope,
 		Accept:      accept,
@@ -214,6 +224,12 @@ func runWorkCreate(args []string) error {
 		if err := ensureLayoutFn(root); err != nil {
 			return err
 		}
+		if strings.TrimSpace(item.Agent) == "" {
+			item.Agent = cfg.Agent.DefaultAgent
+		}
+		if strings.TrimSpace(item.Model) == "" {
+			item.Model = cfg.Agent.DefaultModel
+		}
 		item.Path = filepath.Join(root, config.ActiveWorkDir, fmt.Sprintf("%s-draft.md", item.PaddedID()))
 		data, err := item.Marshal()
 		if err != nil {
@@ -222,7 +238,7 @@ func runWorkCreate(args []string) error {
 		if err := os.WriteFile(item.Path, data, 0644); err != nil {
 			return err
 		}
-		if err := editor.Open(item.Path); err != nil {
+		if err := openEditorFn(item.Path); err != nil {
 			_ = os.Remove(item.Path)
 			return err
 		}
@@ -262,7 +278,7 @@ func runWorkCreate(args []string) error {
 
 	fmt.Printf("Created %s\n", filepath.Base(item.Path))
 	if startFlag {
-		return startWorkItem(root, item, "")
+		return startWorkItem(root, item, "", "")
 	}
 	return nil
 }
@@ -327,7 +343,7 @@ func runWorkEditByItem(item *work.Item) error {
 			return err
 		}
 	}
-	return editor.Open(item.Path)
+	return openEditorFn(item.Path)
 }
 
 func saveByPath(item *work.Item) error {
@@ -347,6 +363,7 @@ func runWorkStart(id string, args []string) error {
 	if err != nil {
 		return err
 	}
+	agent := ""
 	model := ""
 	rootCfg, err := config.Load(root)
 	if err != nil {
@@ -354,19 +371,25 @@ func runWorkStart(id string, args []string) error {
 	}
 	fs := flag.NewFlagSet("work start", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	fs.StringVar(&agent, "agent", "", "initial agent override")
 	fs.StringVar(&model, "model", "", "model override")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if agent != "" {
+		if err := agentpkgValidate(rootCfg.Agent.Command, agent); err != nil {
+			return err
+		}
 	}
 	if model != "" {
 		if err := modelpkgValidate(rootCfg.Agent.Command, model); err != nil {
 			return err
 		}
 	}
-	return startWorkItem(root, item, model)
+	return startWorkItem(root, item, agent, model)
 }
 
-func startWorkItem(root string, item *work.Item, startModel string) (retErr error) {
+func startWorkItem(root string, item *work.Item, startAgent, startModel string) (retErr error) {
 	cfg, err := config.Load(root)
 	if err != nil {
 		return err
@@ -376,9 +399,16 @@ func startWorkItem(root string, item *work.Item, startModel string) (retErr erro
 	if updated.Status == "draft" {
 		updated.Status = "in-progress"
 	}
+	resolvedAgent := agentpkg.Resolve(cfg.Agent.DefaultAgent, updated.Agent, startAgent)
+	if err := agentpkgValidate(cfg.Agent.Command, resolvedAgent); err != nil {
+		return err
+	}
 	resolvedModel := model.Resolve(cfg.Agent.DefaultModel, updated.Model, startModel)
 	if err := modelpkgValidate(cfg.Agent.Command, resolvedModel); err != nil {
 		return err
+	}
+	if strings.TrimSpace(updated.Agent) == "" && strings.TrimSpace(startAgent) == "" {
+		updated.Agent = resolvedAgent
 	}
 	if strings.TrimSpace(updated.Model) == "" && strings.TrimSpace(startModel) == "" {
 		updated.Model = resolvedModel
@@ -468,7 +498,7 @@ func startWorkItem(root string, item *work.Item, startModel string) (retErr erro
 			return err
 		}
 		createdWindow = true
-		if err := sendKeysFn(sessionTarget(sessionName, windowName), buildAgentCommand(root, sessionName, cfg, &updated, resolvedModel)); err != nil {
+		if err := sendKeysFn(sessionTarget(sessionName, windowName), buildAgentCommand(root, sessionName, cfg, &updated, resolvedAgent, resolvedModel)); err != nil {
 			return err
 		}
 	}
@@ -564,12 +594,13 @@ func copyFile(srcPath, dstPath string) error {
 	return nil
 }
 
-func buildAgentCommand(root, sessionName string, cfg *config.Config, item *work.Item, resolvedModel string) string {
+func buildAgentCommand(root, sessionName string, cfg *config.Config, item *work.Item, resolvedAgent, resolvedModel string) string {
 	parts := []string{notify.EnvAssignment(root, sessionName), shellEscape(cfg.Agent.Command)}
 	prompt := strings.ReplaceAll(cfg.Agent.Prompt, "{id}", item.PaddedID())
 	prompt = strings.ReplaceAll(prompt, "{title}", item.Title)
 	prompt = strings.ReplaceAll(prompt, "{branch}", item.Branch)
 	for _, arg := range cfg.Agent.Args {
+		arg = strings.ReplaceAll(arg, "{agent}", resolvedAgent)
 		arg = strings.ReplaceAll(arg, "{model}", resolvedModel)
 		arg = strings.ReplaceAll(arg, "{prompt}", prompt)
 		arg = strings.ReplaceAll(arg, "{id}", item.PaddedID())
@@ -839,6 +870,11 @@ func runDoctor() error {
 	} else {
 		fmt.Printf("agent command: ok (%s)\n", cfg.Agent.Command)
 	}
+	if err := agentpkg.ValidateAvailable(cfg.Agent.Command, cfg.Agent.DefaultAgent); err != nil {
+		fmt.Printf("default agent: invalid (%v)\n", err)
+	} else {
+		fmt.Printf("default agent: ok (%s)\n", cfg.Agent.DefaultAgent)
+	}
 	if err := model.ValidateAvailable(cfg.Agent.Command, cfg.Agent.DefaultModel); err != nil {
 		fmt.Printf("default model: invalid (%v)\n", err)
 	} else {
@@ -974,7 +1010,7 @@ func previousExpectsValue(words []string) bool {
 
 func flagExpectsValue(flagName string) bool {
 	switch flagName {
-	case "-t", "--title", "--model", "-a", "--accept", "-c", "--constraint", "-s", "--scope":
+	case "-t", "--title", "--agent", "--model", "-a", "--accept", "-c", "--constraint", "-s", "--scope":
 		return true
 	default:
 		return false
@@ -1031,7 +1067,7 @@ func rootShortFlags() []string {
 }
 
 func newLongFlags() []string {
-	return []string{"--accept", "--constraint", "--edit", "--model", "--scope", "--start", "--title"}
+	return []string{"--accept", "--agent", "--constraint", "--edit", "--model", "--scope", "--start", "--title"}
 }
 
 func newShortFlags() []string {
@@ -1039,7 +1075,7 @@ func newShortFlags() []string {
 }
 
 func startLongFlags() []string {
-	return []string{"--model"}
+	return []string{"--agent", "--model"}
 }
 
 func completeFlags(current string, longFlags, shortFlags []string) []string {
@@ -1263,11 +1299,11 @@ Usage:
 	conduct completion <bash|zsh|fish>
   conduct init
   conduct new
-  conduct new -t "Review backend code" [--model gpt-5-mini] [--edit] [--start]
+	 conduct new -t "Review backend code" [--agent plan] [--model gpt-5-mini] [--edit] [--start]
   conduct list
   conduct show <id>
   conduct edit <id>
-  conduct start <id> [--model MODEL]
+	 conduct start <id> [--agent AGENT] [--model MODEL]
   conduct open <id>
   conduct notify --event EVENT [--title TITLE] [--message MESSAGE]
   conduct land <id>

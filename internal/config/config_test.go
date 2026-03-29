@@ -42,6 +42,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Agent.Command == "" {
 		t.Fatal("expected agent command")
 	}
+	if cfg.Agent.DefaultAgent == "" {
+		t.Fatal("expected default agent")
+	}
 	if cfg.Agent.DefaultModel == "" {
 		t.Fatal("expected default model")
 	}
@@ -102,6 +105,28 @@ func TestMissingLayout(t *testing.T) {
 	}
 	if len(missing) != 0 {
 		t.Fatalf("expected complete layout, got %v", missing)
+	}
+}
+
+func TestLoadBackfillsAgentDefaults(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ConductDir), 0755); err != nil {
+		t.Fatal(err)
+	}
+	configData := []byte("project:\n  main_branch: main\nagent:\n  command: opencode\n")
+	if err := os.WriteFile(filepath.Join(root, ConfigPath), configData, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.DefaultAgent == "" {
+		t.Fatal("expected default agent when omitted")
+	}
+	if len(cfg.Agent.Args) == 0 {
+		t.Fatal("expected default args when omitted")
 	}
 }
 

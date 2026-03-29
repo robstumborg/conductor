@@ -24,6 +24,7 @@ type Item struct {
 	ID          int      `yaml:"id"`
 	Title       string   `yaml:"title"`
 	Status      string   `yaml:"status"`
+	Agent       string   `yaml:"agent,omitempty"`
 	Model       string   `yaml:"model,omitempty"`
 	Branch      string   `yaml:"branch,omitempty"`
 	Scope       []string `yaml:"scope,omitempty"`
@@ -37,6 +38,7 @@ type Item struct {
 
 type CreateOptions struct {
 	Title       string
+	Agent       string
 	Model       string
 	Scope       []string
 	Accept      []string
@@ -51,6 +53,7 @@ func New(id int, opts CreateOptions) *Item {
 		ID:          id,
 		Title:       strings.TrimSpace(opts.Title),
 		Status:      opts.Status,
+		Agent:       strings.TrimSpace(opts.Agent),
 		Model:       strings.TrimSpace(opts.Model),
 		Scope:       clone(opts.Scope),
 		Accept:      clone(opts.Accept),
