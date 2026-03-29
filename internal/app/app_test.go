@@ -16,6 +16,29 @@ import (
 	"github.com/robstumborg/conductor/internal/work"
 )
 
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func initGitRepo(t *testing.T, root string) {
+	t.Helper()
+	runGit(t, root, "init", "-b", "main")
+	runGit(t, root, "config", "user.name", "Test User")
+	runGit(t, root, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("init\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "README.md")
+	runGit(t, root, "commit", "-m", "init")
+}
+
 func TestRunStatusDoesNotCreateLayout(t *testing.T) {
 	root := t.TempDir()
 
@@ -592,6 +615,172 @@ func TestStartWorkItemWarnsWhenNotificationSetupFails(t *testing.T) {
 	}
 	if item.Status != "in-progress" {
 		t.Fatalf("status=%q want in-progress", item.Status)
+	}
+}
+
+func TestStartWorkItemRejectsExistingNonGitDirectory(t *testing.T) {
+	root := t.TempDir()
+	initGitRepo(t, root)
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{Title: "Test task"})
+	item.EnsureBranch()
+	worktreePath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir())
+	if err := os.MkdirAll(worktreePath, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	origEnsureLocalExcludes := ensureLocalExcludesFn
+	origSessionExists := sessionExistsFn
+	origCreateSession := createSessionFn
+	origWindowExists := windowExistsFn
+	origCreateWindow := createWindowFn
+	origSendKeys := sendKeysFn
+	origOpenTmux := openTmuxFn
+	origSaveWork := saveWorkFn
+	origAgentValidate := agentpkgValidate
+	origModelValidate := modelpkgValidate
+	origNotifyDispatch := notifyDispatchFn
+	defer func() {
+		ensureLocalExcludesFn = origEnsureLocalExcludes
+		sessionExistsFn = origSessionExists
+		createSessionFn = origCreateSession
+		windowExistsFn = origWindowExists
+		createWindowFn = origCreateWindow
+		sendKeysFn = origSendKeys
+		openTmuxFn = origOpenTmux
+		saveWorkFn = origSaveWork
+		agentpkgValidate = origAgentValidate
+		modelpkgValidate = origModelValidate
+		notifyDispatchFn = origNotifyDispatch
+	}()
+
+	ensureLocalExcludesFn = func(string, []string) error { return nil }
+	sessionExistsFn = func(string) bool { return true }
+	createSessionFn = func(string, string) error { return nil }
+	windowExistsFn = func(string, string) bool { return true }
+	createWindowFn = func(string, string, string) error { return nil }
+	sendKeysFn = func(string, string) error { return nil }
+	openTmuxFn = func(string) error { return nil }
+	saveWorkFn = func(string, *work.Item, bool) error { return nil }
+	agentpkgValidate = func(string, string) error { return nil }
+	modelpkgValidate = func(string, string) error { return nil }
+
+	err := startWorkItem(root, item, "", "")
+	if err == nil || !strings.Contains(err.Error(), "resolves to git root") {
+		t.Fatalf("expected non-git worktree error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(worktreePath, config.CurrentWorkPath)); !os.IsNotExist(statErr) {
+		t.Fatalf("expected current work file to remain absent, got %v", statErr)
+	}
+}
+
+func TestStartWorkItemRejectsExistingWorktreeOnWrongBranch(t *testing.T) {
+	root := t.TempDir()
+	initGitRepo(t, root)
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{Title: "Test task"})
+	item.EnsureBranch()
+	worktreePath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir())
+	runGit(t, root, "worktree", "add", worktreePath, "-b", "conduct/9999-other")
+
+	origEnsureLocalExcludes := ensureLocalExcludesFn
+	origSessionExists := sessionExistsFn
+	origCreateSession := createSessionFn
+	origWindowExists := windowExistsFn
+	origCreateWindow := createWindowFn
+	origSendKeys := sendKeysFn
+	origOpenTmux := openTmuxFn
+	origSaveWork := saveWorkFn
+	origAgentValidate := agentpkgValidate
+	origModelValidate := modelpkgValidate
+	defer func() {
+		ensureLocalExcludesFn = origEnsureLocalExcludes
+		sessionExistsFn = origSessionExists
+		createSessionFn = origCreateSession
+		windowExistsFn = origWindowExists
+		createWindowFn = origCreateWindow
+		sendKeysFn = origSendKeys
+		openTmuxFn = origOpenTmux
+		saveWorkFn = origSaveWork
+		agentpkgValidate = origAgentValidate
+		modelpkgValidate = origModelValidate
+	}()
+
+	ensureLocalExcludesFn = func(string, []string) error { return nil }
+	sessionExistsFn = func(string) bool { return true }
+	createSessionFn = func(string, string) error { return nil }
+	windowExistsFn = func(string, string) bool { return true }
+	createWindowFn = func(string, string, string) error { return nil }
+	sendKeysFn = func(string, string) error { return nil }
+	openTmuxFn = func(string) error { return nil }
+	saveWorkFn = func(string, *work.Item, bool) error { return nil }
+	agentpkgValidate = func(string, string) error { return nil }
+	modelpkgValidate = func(string, string) error { return nil }
+
+	err := startWorkItem(root, item, "", "")
+	if err == nil || !strings.Contains(err.Error(), "expected \""+item.Branch+"\"") {
+		t.Fatalf("expected wrong-branch error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(worktreePath, config.CurrentWorkPath)); !os.IsNotExist(statErr) {
+		t.Fatalf("expected current work file to remain absent, got %v", statErr)
+	}
+}
+
+func TestStartWorkItemAcceptsExistingMatchingWorktree(t *testing.T) {
+	root := t.TempDir()
+	initGitRepo(t, root)
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{Title: "Test task"})
+	item.EnsureBranch()
+	worktreePath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir())
+	runGit(t, root, "worktree", "add", worktreePath, "-b", item.Branch)
+
+	origEnsureLocalExcludes := ensureLocalExcludesFn
+	origSessionExists := sessionExistsFn
+	origCreateSession := createSessionFn
+	origWindowExists := windowExistsFn
+	origCreateWindow := createWindowFn
+	origSendKeys := sendKeysFn
+	origOpenTmux := openTmuxFn
+	origSaveWork := saveWorkFn
+	origAgentValidate := agentpkgValidate
+	origModelValidate := modelpkgValidate
+	defer func() {
+		ensureLocalExcludesFn = origEnsureLocalExcludes
+		sessionExistsFn = origSessionExists
+		createSessionFn = origCreateSession
+		windowExistsFn = origWindowExists
+		createWindowFn = origCreateWindow
+		sendKeysFn = origSendKeys
+		openTmuxFn = origOpenTmux
+		saveWorkFn = origSaveWork
+		agentpkgValidate = origAgentValidate
+		modelpkgValidate = origModelValidate
+	}()
+
+	ensureLocalExcludesFn = func(string, []string) error { return nil }
+	sessionExistsFn = func(string) bool { return true }
+	createSessionFn = func(string, string) error { return nil }
+	windowExistsFn = func(string, string) bool { return false }
+	createWindowFn = func(string, string, string) error { return nil }
+	sendKeysFn = func(string, string) error { return nil }
+	openTmuxFn = func(string) error { return nil }
+	saveWorkFn = func(string, *work.Item, bool) error { return nil }
+	agentpkgValidate = func(string, string) error { return nil }
+	modelpkgValidate = func(string, string) error { return nil }
+	notifyDispatchFn = func(string, string, *config.Config, notify.Event) error { return nil }
+
+	if err := startWorkItem(root, item, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, config.CurrentWorkPath)); err != nil {
+		t.Fatalf("expected current work file to be written, got %v", err)
 	}
 }
 

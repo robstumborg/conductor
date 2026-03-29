@@ -29,6 +29,9 @@ var buildCommit = "dev"
 var buildDate = "unknown"
 
 var repoRootFn = git.RepoRoot
+var currentBranchFn = git.CurrentBranch
+var topLevelFn = git.TopLevel
+var commonDirFn = git.CommonDir
 var ensureLayoutFn = config.EnsureLayout
 var branchExistsFn = git.BranchExists
 var refExistsFn = git.RefExists
@@ -461,6 +464,8 @@ func startWorkItem(root string, item *work.Item, startAgent, startModel string) 
 		createdWorktree = true
 	} else if err != nil {
 		return err
+	} else if err := validateExistingWorktree(root, worktreePath, updated.Branch); err != nil {
+		return err
 	}
 	if err := ensureLocalExcludesFn(worktreePath, []string{config.CurrentWorkPath, config.WorktreesDir + "/"}); err != nil {
 		return err
@@ -573,6 +578,35 @@ func copyDirContents(srcRoot, dstRoot string) error {
 		if err := copyFile(srcPath, dstPath); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateExistingWorktree(root, worktreePath, expectedBranch string) error {
+	rootCommonDir, err := commonDirFn(root)
+	if err != nil {
+		return fmt.Errorf("failed to inspect repo git dir: %w", err)
+	}
+	worktreeRoot, err := topLevelFn(worktreePath)
+	if err != nil {
+		return fmt.Errorf("existing worktree path is not a git worktree: %w", err)
+	}
+	if filepath.Clean(worktreeRoot) != filepath.Clean(worktreePath) {
+		return fmt.Errorf("existing worktree path %q resolves to git root %q", worktreePath, worktreeRoot)
+	}
+	worktreeCommonDir, err := commonDirFn(worktreePath)
+	if err != nil {
+		return fmt.Errorf("failed to inspect existing worktree git dir: %w", err)
+	}
+	if filepath.Clean(worktreeCommonDir) != filepath.Clean(rootCommonDir) {
+		return fmt.Errorf("existing worktree path %q belongs to a different git repository", worktreePath)
+	}
+	branch, err := currentBranchFn(worktreePath)
+	if err != nil {
+		return fmt.Errorf("failed to inspect existing worktree branch: %w", err)
+	}
+	if branch != expectedBranch {
+		return fmt.Errorf("existing worktree path %q is on branch %q, expected %q", worktreePath, branch, expectedBranch)
 	}
 	return nil
 }
