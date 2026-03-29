@@ -1,0 +1,283 @@
+.TH CONDUCT 1 "March 2026" "conductor" "User Commands"
+.SH NAME
+conduct \- orchestrate AI-assisted work inside a git repository
+.SH SYNOPSIS
+.B conduct
+.I command
+[
+.I arguments
+]
+.br
+.B conduct init
+.br
+.B conduct new
+[
+.B \-t
+title
+]
+[
+.B \-\-model
+model
+]
+[
+.B \-\-edit
+]
+[
+.B \-\-start
+]
+[
+.B \-a
+acceptance
+]
+[
+.B \-c
+constraint
+]
+[
+.B \-s
+scope
+]
+.br
+.B conduct list
+.br
+.B conduct show
+.I id
+.br
+.B conduct edit
+.I id
+.br
+.B conduct start
+.I id
+[
+.B \-\-model
+model
+]
+.br
+.B conduct open
+.I id
+.br
+.B conduct land
+.I id
+.br
+.B conduct drop
+.I id
+.br
+.B conduct status
+.br
+.B conduct config show
+.br
+.B conduct doctor
+.br
+.B conduct version
+.SH DESCRIPTION
+.B conduct
+manages task records, git worktrees, branches, tmux windows, and agent sessions for work performed inside a git repository.
+
+Work items are stored as Markdown files with YAML front matter under
+.I .conduct/work
+.
+Starting a work item creates or reuses a task branch, creates a worktree, writes the current task file, opens or creates a tmux window, and launches the configured agent command.
+.SH COMMANDS
+.TP
+.B init
+Create the
+.I .conduct/
+layout in the current git repository.
+If
+.I .conduct/config.yaml
+does not exist, write a default config.
+Also ensure conductor runtime files are ignored by git.
+.TP
+.B new
+Create a new work item.
+If no title is provided, conduct writes a draft file and opens it in the editor.
+If a title is provided, conduct writes the task record directly.
+Use
+.B \-\-start
+to start the task immediately after creation.
+.TP
+.B list
+List active and archived work items.
+.TP
+.B show
+.I id
+Show one work item by numeric ID or zero-padded ID.
+.TP
+.B edit
+.I id
+Open an active work item in the editor.
+If the body is empty, conduct inserts a
+.B "## Description"
+heading first.
+.TP
+.B start
+.I id
+Start an active work item.
+This command ensures the task branch exists, creates the worktree if needed, writes
+.I .conduct/current.md
+in that worktree, creates the tmux window if needed, and launches the agent command.
+If already running inside tmux, conduct starts the task window in the background and prints the tmux target.
+Otherwise it opens the tmux target.
+.TP
+.B open
+.I id
+Open the tmux window for an active work item.
+The window must already exist.
+.TP
+.B land
+.I id
+Squash-merge the task branch into the configured main branch, archive the work item, and remove the task worktree and branch.
+This command must be run from the configured main branch.
+The task worktree must be clean.
+The task branch must be ahead of main.
+conduct does not create the final commit; it leaves the squash merge result in the main worktree for review and commit.
+.TP
+.B drop
+.I id
+Archive the work item as dropped and remove the associated worktree and branch after confirmation.
+.TP
+.B status
+Show active work items and whether their tmux windows are currently active.
+.TP
+.B config show
+Print the effective configuration as YAML.
+.TP
+.B doctor
+Check repository, tool, model, and layout readiness.
+This reports git repository status, git and tmux availability, configured agent command availability, configured default model availability, and conductor layout presence.
+.TP
+.B version
+Print build metadata.
+.SH OPTIONS
+.SS conduct new
+.TP
+.BR \-t ", " \-\-title " " title
+Set the work item title.
+If omitted, conduct creates a draft file and opens the editor.
+.TP
+.B \-\-model
+Set a model override for the new work item.
+The value must be in
+.B provider/model
+format and must be available from the configured agent command.
+.TP
+.B \-\-edit
+Open the work item in the editor before returning.
+.TP
+.B \-\-start
+Start the work item immediately after creation.
+.TP
+.BR \-a ", " \-\-accept " " text
+Add an acceptance criterion.
+This option may be provided more than once.
+.TP
+.BR \-c ", " \-\-constraint " " text
+Add a constraint.
+This option may be provided more than once.
+.TP
+.BR \-s ", " \-\-scope " " text
+Add a scope value.
+This option may be provided more than once.
+.SS conduct start
+.TP
+.B \-\-model
+Override the model used for this start operation.
+If set, this value takes precedence over the work item model and the configured default model.
+.SH WORKFLOW
+.TP
+1.
+Run
+.B conduct init
+once per repository.
+.TP
+2.
+Create a work item with
+.B conduct new
+or
+.B "conduct new -t ..."
+.
+.TP
+3.
+Start it with
+.B conduct start
+or by using
+.B \-\-start
+at creation time.
+.TP
+4.
+Use
+.B conduct status
+,
+.B conduct list
+,
+and
+.B conduct show
+to inspect state.
+.TP
+5.
+Use
+.B conduct open
+to return to an existing tmux window.
+.TP
+6.
+Use
+.B conduct land
+to apply a squash merge onto main after the task branch has committed changes and the task worktree is clean.
+.SH FILES
+.TP
+.I .conduct/config.yaml
+Project configuration.
+.TP
+.I .conduct/work/active/
+Active work item records.
+.TP
+.I .conduct/work/archive/
+Archived work item records.
+.TP
+.I .conduct/worktrees/
+Task worktrees.
+.TP
+.I .conduct/current.md
+Runtime copy of the current assignment written inside a task worktree.
+Do not include this file in commits.
+.SH ENVIRONMENT
+.TP
+.B EDITOR
+Editor command used by
+.B conduct new
+and
+.B conduct edit
+when a file must be opened interactively.
+If
+.B EDITOR
+is unset, conduct uses
+.B vi
+.
+.TP
+.B TMUX
+If set, conduct assumes it is already running inside tmux and starts task windows in the background instead of attaching immediately.
+.SH EXIT STATUS
+.B conduct
+returns 0 on success and non-zero on error.
+.SH EXAMPLES
+.TP
+Initialize the current repository:
+.B conduct init
+.TP
+Create and start a task:
+.B "conduct new -t 'Fix flaky tests' --start"
+.TP
+Create a task with more metadata:
+.B "conduct new -t 'Review backend code' --scope api --accept 'tests updated' --constraint 'do not change public API'"
+.TP
+Start an existing task:
+.B "conduct start 1"
+.TP
+Open a running task window:
+.B "conduct open 1"
+.TP
+Land finished work from main:
+.B "conduct land 1"
+.SH SEE ALSO
+.BR git (1),
+.BR tmux (1)
