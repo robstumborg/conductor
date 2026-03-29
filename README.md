@@ -1,5 +1,7 @@
 # conductor
 
+Be the conductor of your AI orchestra.
+
 `conduct` is a CLI for running AI-assisted work inside a git repo without turning your terminal into soup.
 
 Each task gets its own branch, worktree, tmux window, and agent session. Clean lane in, clean lane out.
