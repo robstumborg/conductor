@@ -254,9 +254,9 @@ func runWorkCreate(args []string) error {
 			_ = os.Remove(item.Path)
 			return err
 		}
-		if strings.TrimSpace(edited.Title) == "" {
+		if err := edited.Validate(); err != nil {
 			_ = os.Remove(item.Path)
-			return errors.New("aborted: title is required")
+			return fmt.Errorf("aborted: %w", err)
 		}
 		oldPath := edited.Path
 		edited.Path = ""

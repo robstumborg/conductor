@@ -105,3 +105,30 @@ func TestParseSupportsCRLFFrontmatter(t *testing.T) {
 		t.Fatal("expected body")
 	}
 }
+
+func TestValidateAllowsDescriptionOnly(t *testing.T) {
+	item := New(12, CreateOptions{InsertBody: true})
+	item.Body = "## Description\n\nInvestigate the failing editor flow.\n"
+	if err := item.Validate(); err != nil {
+		t.Fatalf("validate error: %v", err)
+	}
+}
+
+func TestValidateRejectsMissingTitleAndDescription(t *testing.T) {
+	item := New(12, CreateOptions{InsertBody: true})
+	if err := item.Validate(); err == nil || err.Error() != "title or description is required" {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestValidateRejectsHeadingOnlyDescription(t *testing.T) {
+	item := New(12, CreateOptions{InsertBody: true})
+	item.Body = "## Description\n\n"
+	if err := item.Validate(); err == nil || err.Error() != "title or description is required" {
+		t.Fatalf("err=%v", err)
+	}
+	item.Title = "Keep title"
+	if err := item.Validate(); err != nil {
+		t.Fatalf("validate error: %v", err)
+	}
+}

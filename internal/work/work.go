@@ -71,13 +71,27 @@ func New(id int, opts CreateOptions) *Item {
 }
 
 func (i *Item) Validate() error {
-	if strings.TrimSpace(i.Title) == "" {
-		return fmt.Errorf("title is required")
+	if strings.TrimSpace(i.Title) == "" && !i.HasDescription() {
+		return fmt.Errorf("title or description is required")
 	}
 	if i.Status == "" {
 		return fmt.Errorf("status is required")
 	}
 	return nil
+}
+
+func (i *Item) HasDescription() bool {
+	body := strings.TrimSpace(i.Body)
+	if body == "" {
+		return false
+	}
+	if body == "## Description" {
+		return false
+	}
+	if strings.HasPrefix(body, "## Description\n") {
+		return strings.TrimSpace(strings.TrimPrefix(body, "## Description\n")) != ""
+	}
+	return true
 }
 
 func (i *Item) Slug() string {

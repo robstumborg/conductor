@@ -238,6 +238,91 @@ func TestRunWorkCreateDraftPrefillsDefaultAgentAndModel(t *testing.T) {
 	}
 }
 
+func TestRunWorkCreateDraftAllowsDescriptionOnly(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+
+	origRepoRoot := repoRootFn
+	origOpenEditor := openEditorFn
+	defer func() {
+		repoRootFn = origRepoRoot
+		openEditorFn = origOpenEditor
+	}()
+
+	repoRootFn = func() (string, error) { return root, nil }
+	openEditorFn = func(path string) error {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		updated := strings.Replace(string(contents), "## Description\n", "## Description\n\nUse the description as the task request.\n", 1)
+		return os.WriteFile(path, []byte(updated), 0644)
+	}
+
+	if err := runWorkCreate(nil); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(root, config.ActiveWorkDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries=%d want 1", len(entries))
+	}
+	if got := entries[0].Name(); got != "0001-work-0001.md" {
+		t.Fatalf("name=%q", got)
+	}
+	item, err := work.Parse(filepath.Join(root, config.ActiveWorkDir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Title != "" {
+		t.Fatalf("title=%q want empty", item.Title)
+	}
+	if !strings.Contains(item.Body, "Use the description as the task request.") {
+		t.Fatalf("body=%q", item.Body)
+	}
+}
+
+func TestRunWorkCreateDraftRejectsMissingTitleAndDescription(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+
+	origRepoRoot := repoRootFn
+	origOpenEditor := openEditorFn
+	defer func() {
+		repoRootFn = origRepoRoot
+		openEditorFn = origOpenEditor
+	}()
+
+	repoRootFn = func() (string, error) { return root, nil }
+	openEditorFn = func(path string) error {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		updated := strings.Replace(string(contents), "## Description\n", "## Description\n\n", 1)
+		return os.WriteFile(path, []byte(updated), 0644)
+	}
+
+	err := runWorkCreate(nil)
+	if err == nil || err.Error() != "aborted: title or description is required" {
+		t.Fatalf("err=%v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, config.ActiveWorkDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries=%d want 0", len(entries))
+	}
+}
+
 func TestStartWorkItemRollsBackOnWindowFailure(t *testing.T) {
 	root := t.TempDir()
 	if err := config.EnsureLayout(root); err != nil {
