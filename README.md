@@ -95,6 +95,19 @@ If you are already inside tmux, the task starts in the background and `conduct` 
 
 ## Customize and check
 
+Enable shell completion:
+
+```bash
+# bash
+source <(conduct completion bash)
+
+# zsh
+source <(conduct completion zsh)
+
+# fish
+conduct completion fish | source
+```
+
 See the effective config:
 
 ```bash

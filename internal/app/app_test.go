@@ -2,8 +2,11 @@ package app
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/robstumborg/conductor/internal/config"
@@ -214,4 +217,106 @@ func TestSyncCurrentRejectsInvalidCurrentFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected invalid current file error")
 	}
+}
+
+func TestCompleteArgsRootCommandSuggestions(t *testing.T) {
+	got := completeArgs([]string{"st"})
+	want := []string{"start", "status"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%v want=%v", got, want)
+	}
+}
+
+func TestCompleteArgsNewFlags(t *testing.T) {
+	got := completeArgs([]string{"new", "--s"})
+	want := []string{"--scope", "--start"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%v want=%v", got, want)
+	}
+}
+
+func TestCompleteArgsNewFlagsPreferLongByDefault(t *testing.T) {
+	got := completeArgs([]string{"new", ""})
+	want := []string{"--accept", "--constraint", "--edit", "--model", "--scope", "--start", "--title"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%v want=%v", got, want)
+	}
+}
+
+func TestCompleteArgsNewFlagsSuggestShortAliasesForShortPrefix(t *testing.T) {
+	got := completeArgs([]string{"new", "-"})
+	want := []string{"-a", "-c", "-s", "-t"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%v want=%v", got, want)
+	}
+}
+
+func TestCompleteArgsStartSuggestsActiveIDs(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item1 := work.New(1, work.CreateOptions{Title: "First task"})
+	item2 := work.New(12, work.CreateOptions{Title: "Second task"})
+	if err := work.Save(root, item1, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := work.Save(root, item2, false); err != nil {
+		t.Fatal(err)
+	}
+
+	origRepoRoot := repoRootFn
+	defer func() { repoRootFn = origRepoRoot }()
+	repoRootFn = func() (string, error) { return root, nil }
+
+	got := completeArgs([]string{"start", ""})
+	want := []string{"0001", "0012"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%v want=%v", got, want)
+	}
+}
+
+func TestCompleteArgsStartSuggestsFlagsAfterID(t *testing.T) {
+	got := completeArgs([]string{"start", "1", "--"})
+	want := []string{"--model"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%v want=%v", got, want)
+	}
+}
+
+func TestRunCompletionBash(t *testing.T) {
+	output := captureStdout(t, func() {
+		if err := runCompletion([]string{"bash"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if !strings.Contains(output, "__complete") {
+		t.Fatalf("expected completion helper in output, got %q", output)
+	}
+	if !strings.Contains(output, "complete -F _conduct_completion conduct") {
+		t.Fatalf("expected bash registration in output, got %q", output)
+	}
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }

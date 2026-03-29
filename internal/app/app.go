@@ -59,6 +59,10 @@ func Run(args []string) error {
 	}
 
 	switch args[0] {
+	case "__complete":
+		return runComplete(args[1:])
+	case "completion":
+		return runCompletion(args[1:])
 	case "init":
 		return runInit()
 	case "new":
@@ -718,6 +722,259 @@ func runDoctor() error {
 	return nil
 }
 
+func runCompletion(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: conduct completion <bash|zsh|fish>")
+	}
+
+	script, err := completionScript(args[0])
+	if err != nil {
+		return err
+	}
+	fmt.Print(script)
+	return nil
+}
+
+func runComplete(args []string) error {
+	for _, suggestion := range completeArgs(args) {
+		fmt.Println(suggestion)
+	}
+	return nil
+}
+
+func completeArgs(args []string) []string {
+	if len(args) == 0 {
+		return append([]string{}, rootCompletionItems()...)
+	}
+
+	words := args[:len(args)-1]
+	current := args[len(args)-1]
+	if len(args) == 1 {
+		words = nil
+	}
+
+	if len(words) == 0 {
+		if strings.HasPrefix(current, "-") {
+			return completeFlags(current, rootLongFlags(), rootShortFlags())
+		}
+		return filterPrefix(rootCompletionItems(), current)
+	}
+
+	command := words[0]
+	restWords := words[1:]
+
+	switch command {
+	case "new":
+		return completeFlagSet(restWords, current, newLongFlags(), newShortFlags())
+	case "start":
+		return completeIDCommand(restWords, current, startLongFlags(), nil)
+	case "show", "edit", "open", "land", "drop":
+		return completeIDCommand(restWords, current, nil, nil)
+	case "config":
+		if len(restWords) > 0 {
+			return nil
+		}
+		return filterPrefix([]string{"show"}, current)
+	case "completion":
+		if len(restWords) > 0 {
+			return nil
+		}
+		return filterPrefix([]string{"bash", "zsh", "fish"}, current)
+	case "help", "version", "doctor", "list", "status", "init":
+		return nil
+	default:
+		return filterPrefix(rootCompletionItems(), current)
+	}
+}
+
+func completeFlagSet(words []string, current string, longFlags, shortFlags []string) []string {
+	if previousExpectsValue(words) {
+		return nil
+	}
+	return completeFlags(current, longFlags, shortFlags)
+}
+
+func completeIDCommand(words []string, current string, longFlags, shortFlags []string) []string {
+	if len(words) == 0 {
+		if strings.HasPrefix(current, "-") {
+			return completeFlags(current, longFlags, shortFlags)
+		}
+		return filterPrefix(activeWorkIDSuggestions(), current)
+	}
+
+	if previousExpectsValue(words) {
+		return nil
+	}
+
+	if len(words) == 1 && words[0] != "" && !strings.HasPrefix(words[0], "-") {
+		if strings.HasPrefix(current, "-") {
+			return completeFlags(current, longFlags, shortFlags)
+		}
+		return nil
+	}
+
+	if strings.HasPrefix(current, "-") {
+		return completeFlags(current, longFlags, shortFlags)
+	}
+	return nil
+}
+
+func previousExpectsValue(words []string) bool {
+	if len(words) == 0 {
+		return false
+	}
+	return flagExpectsValue(words[len(words)-1])
+}
+
+func flagExpectsValue(flagName string) bool {
+	switch flagName {
+	case "-t", "--title", "--model", "-a", "--accept", "-c", "--constraint", "-s", "--scope":
+		return true
+	default:
+		return false
+	}
+}
+
+func activeWorkIDSuggestions() []string {
+	root, err := repoRootFn()
+	if err != nil {
+		return nil
+	}
+	active, _, err := work.List(root)
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(active))
+	for _, item := range active {
+		values = append(values, item.PaddedID())
+	}
+	return uniqueSorted(values)
+}
+
+func rootCompletionItems() []string {
+	items := append(commandNames(), rootLongFlags()...)
+	return uniqueSorted(items)
+}
+
+func commandNames() []string {
+	return []string{
+		"completion",
+		"config",
+		"doctor",
+		"drop",
+		"edit",
+		"help",
+		"init",
+		"land",
+		"list",
+		"new",
+		"open",
+		"show",
+		"start",
+		"status",
+		"version",
+	}
+}
+
+func rootLongFlags() []string {
+	return []string{"--help", "--version"}
+}
+
+func rootShortFlags() []string {
+	return []string{"-h", "-v"}
+}
+
+func newLongFlags() []string {
+	return []string{"--accept", "--constraint", "--edit", "--model", "--scope", "--start", "--title"}
+}
+
+func newShortFlags() []string {
+	return []string{"-a", "-c", "-s", "-t"}
+}
+
+func startLongFlags() []string {
+	return []string{"--model"}
+}
+
+func completeFlags(current string, longFlags, shortFlags []string) []string {
+	if current == "" || strings.HasPrefix(current, "--") {
+		return filterPrefix(longFlags, current)
+	}
+	if strings.HasPrefix(current, "-") {
+		return filterPrefix(shortFlags, current)
+	}
+	return filterPrefix(longFlags, current)
+}
+
+func filterPrefix(values []string, prefix string) []string {
+	if prefix == "" {
+		return uniqueSorted(values)
+	}
+	matched := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.HasPrefix(value, prefix) {
+			matched = append(matched, value)
+		}
+	}
+	return uniqueSorted(matched)
+}
+
+func uniqueSorted(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	sort.Strings(unique)
+	return unique
+}
+
+func completionScript(shell string) (string, error) {
+	switch shell {
+	case "bash":
+		return `# bash completion for conduct
+_conduct_completion() {
+	local cur out
+	local -a words
+	COMPREPLY=()
+	cur="${COMP_WORDS[COMP_CWORD]}"
+	words=("${COMP_WORDS[@]:1}")
+	out="$(${COMP_WORDS[0]} __complete "${words[@]}" 2>/dev/null)" || return 0
+	COMPREPLY=( $(compgen -W "$out" -- "$cur") )
+}
+complete -F _conduct_completion conduct
+`, nil
+	case "zsh":
+		return `#compdef conduct
+_conduct() {
+	local -a words reply
+	words=("${words[@]:2}" "$PREFIX")
+	reply=("${(@f)$(conduct __complete "${words[@]}" 2>/dev/null)}")
+	_describe 'values' reply
+}
+compdef _conduct conduct
+`, nil
+	case "fish":
+		return `function __conduct_complete
+	set -l tokens (commandline -opc)
+	set -e tokens[1]
+	conduct __complete $tokens (commandline -ct) 2>/dev/null
+end
+
+complete -c conduct -f -a '(__conduct_complete)'
+`, nil
+	default:
+		return "", fmt.Errorf("unsupported shell %q (want bash, zsh, or fish)", shell)
+	}
+}
+
 func repoReady() (string, error) {
 	root, err := repoRoot()
 	if err != nil {
@@ -857,6 +1114,7 @@ func printHelp() {
 	fmt.Print(`conductor
 
 Usage:
+	conduct completion <bash|zsh|fish>
   conduct init
   conduct new
   conduct new -t "Review backend code" [--model gpt-5-mini] [--edit] [--start]
@@ -873,6 +1131,7 @@ Usage:
   conduct version
 
 Notes:
+	- conduct completion prints a shell completion script.
 	- conduct new opens your editor for a new work item.
 	- conduct new -t ... creates a title-only work item.
 	- Work only starts with --start or conduct start <id>.

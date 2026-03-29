@@ -69,6 +69,9 @@ model
 .B conduct doctor
 .br
 .B conduct version
+.br
+.B conduct completion
+.I shell
 .SH DESCRIPTION
 .B conduct
 manages task records, git worktrees, branches, tmux windows, and agent sessions for work performed inside a git repository.
@@ -145,6 +148,15 @@ Print the effective configuration as YAML.
 .B doctor
 Check repository, tool, model, and layout readiness.
 This reports git repository status, git and tmux availability, configured agent command availability, configured default model availability, and conductor layout presence.
+.TP
+.B completion
+.I shell
+Print a shell completion script for
+.IR bash ,
+.IR zsh ,
+or
+.IR fish .
+The generated completion is context-aware for subcommands, command flags, and active work item IDs.
 .TP
 .B version
 Print build metadata.
@@ -278,6 +290,9 @@ Open a running task window:
 .TP
 Land finished work from main:
 .B "conduct land 1"
+.TP
+Enable bash completion for the current shell:
+.B "source <(conduct completion bash)"
 .SH SEE ALSO
 .BR git (1),
 .BR tmux (1)
