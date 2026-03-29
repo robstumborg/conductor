@@ -128,6 +128,9 @@ func RemoveWorktreeForce(root, path string) error {
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if isMissingWorktreeError(string(out)) {
+			return nil
+		}
 		return fmt.Errorf("git worktree remove --force failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -148,9 +151,22 @@ func DeleteBranchForce(root, branch string) error {
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if isMissingBranchError(string(out), branch) {
+			return nil
+		}
 		return fmt.Errorf("git branch delete -D failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func isMissingWorktreeError(output string) bool {
+	trimmed := strings.TrimSpace(output)
+	return strings.Contains(trimmed, "is not a working tree") || strings.Contains(trimmed, "not found")
+}
+
+func isMissingBranchError(output, branch string) bool {
+	trimmed := strings.TrimSpace(output)
+	return strings.Contains(trimmed, "branch '"+branch+"' not found")
 }
 
 func SquashMerge(root, branch string) error {

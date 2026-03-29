@@ -91,6 +91,12 @@ func TestCleanupHelpersHonorAndBypassGitSafety(t *testing.T) {
 	if err := DeleteBranchForce(root, "conduct/0002-unmerged"); err != nil {
 		t.Fatal(err)
 	}
+	if err := RemoveWorktreeForce(root, worktreePath); err != nil {
+		t.Fatalf("expected missing worktree to be treated as already clean, got %v", err)
+	}
+	if err := DeleteBranchForce(root, "conduct/0002-unmerged"); err != nil {
+		t.Fatalf("expected missing branch to be treated as already clean, got %v", err)
+	}
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

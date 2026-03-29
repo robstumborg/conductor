@@ -805,11 +805,11 @@ func runWorkDrop(id string) error {
 	if !confirmPromptFn(message, true) {
 		return nil
 	}
-	item.Status = "dropped"
-	if err := work.Archive(root, item); err != nil {
+	if err := cleanupWork(root, item, cleanupOptions{forceWorktreeRemove: true, forceBranchDelete: true}); err != nil {
 		return err
 	}
-	if err := cleanupWork(root, item, cleanupOptions{forceWorktreeRemove: true, forceBranchDelete: true}); err != nil {
+	item.Status = "dropped"
+	if err := work.Archive(root, item); err != nil {
 		return err
 	}
 	fmt.Printf("Dropped %s\n", item.Title)
@@ -824,11 +824,7 @@ type cleanupOptions struct {
 func cleanupWork(root string, item *work.Item, opts cleanupOptions) error {
 	var errs []error
 	if cfg, err := config.Load(root); err == nil {
-		if err := killWindowFn(sessionTarget(projectSessionName(root, cfg), item.WindowName())); err != nil {
-			errs = append(errs, err)
-		}
-	} else {
-		errs = append(errs, err)
+		_ = killWindowFn(sessionTarget(projectSessionName(root, cfg), item.WindowName()))
 	}
 	worktreePath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir())
 	removeWorktree := cleanupRemoveWorktreeFn
@@ -1357,20 +1353,25 @@ func slugify(value string) string {
 func dropConfirmationMessage(root string, cfg *config.Config, item *work.Item) (string, error) {
 	worktreePath := filepath.Join(root, config.WorktreesDir, item.WorktreeDir())
 	clean, status, err := isCleanFn(worktreePath)
+	inspectNotes := []string{}
 	if err != nil {
-		return "", fmt.Errorf("failed to inspect task worktree: %w", err)
+		clean = true
+		status = nil
+		inspectNotes = append(inspectNotes, fmt.Sprintf("Worktree %s could not be inspected; it may already be clean.", worktreePath))
 	}
 	hasCommits := false
 	if item.Branch != "" {
 		hasCommits, err = hasCommitsAheadFn(root, cfg.Project.MainBranch, item.Branch)
 		if err != nil {
-			return "", fmt.Errorf("failed to compare %s against %s: %w", item.Branch, cfg.Project.MainBranch, err)
+			inspectNotes = append(inspectNotes, fmt.Sprintf("Branch %s could not be inspected; it may already be clean.", item.Branch))
+			hasCommits = false
 		}
 	}
-	if clean && !hasCommits {
+	if clean && !hasCommits && len(inspectNotes) == 0 {
 		return fmt.Sprintf("Drop work item %d (%s)?", item.ID, item.Title), nil
 	}
 	warnings := []string{fmt.Sprintf("WARNING: dropping work item %d (%s) will permanently remove local task state.", item.ID, item.Title)}
+	warnings = append(warnings, inspectNotes...)
 	if !clean {
 		warnings = append(warnings, fmt.Sprintf("Uncommitted changes will be lost: %s.", summarizeStatuses(status)))
 	}

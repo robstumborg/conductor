@@ -1155,16 +1155,19 @@ func TestRunWorkDropReturnsCleanupErrors(t *testing.T) {
 	isCleanFn = func(string) (bool, []git.FileStatus, error) { return true, nil, nil }
 	hasCommitsAheadFn = func(string, string, string) (bool, error) { return false, nil }
 	killWindowFn = func(string) error { return errors.New("tmux failed") }
-	cleanupRemoveWorktreeForceFn = func(string, string) error { return nil }
+	cleanupRemoveWorktreeForceFn = func(string, string) error { return errors.New("worktree failed") }
 	cleanupDeleteBranchForceFn = func(string, string) error { return nil }
 
 	err := runWorkDrop("1")
-	if err == nil || !strings.Contains(err.Error(), "cleanup failed") || !strings.Contains(err.Error(), "tmux failed") {
+	if err == nil || !strings.Contains(err.Error(), "cleanup failed") || !strings.Contains(err.Error(), "worktree failed") {
 		t.Fatalf("expected cleanup error, got %v", err)
 	}
+	if _, statErr := os.Stat(item.Path); statErr != nil {
+		t.Fatalf("expected active work item to remain after failed cleanup, got %v", statErr)
+	}
 	archivedPath := filepath.Join(root, config.ArchiveWorkDir, item.Filename())
-	if _, statErr := os.Stat(archivedPath); statErr != nil {
-		t.Fatalf("expected archived work item, got %v", statErr)
+	if _, statErr := os.Stat(archivedPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no archived work item after failed cleanup, got %v", statErr)
 	}
 }
 
@@ -1193,10 +1196,52 @@ func TestCleanupWorkReturnsJoinedErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected cleanup error")
 	}
-	for _, want := range []string{"window failed", "worktree failed", "branch failed"} {
+	for _, want := range []string{"worktree failed", "branch failed"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected %q in %v", want, err)
 		}
+	}
+	if strings.Contains(err.Error(), "window failed") {
+		t.Fatalf("expected tmux window failures to be ignored, got %v", err)
+	}
+}
+
+func TestDropConfirmationMessageNotesAlreadyCleanWorktree(t *testing.T) {
+	root := t.TempDir()
+	if err := config.EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	item := work.New(1, work.CreateOptions{Title: "Cleanup task"})
+	item.EnsureBranch()
+	cfg, err := config.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origIsClean := isCleanFn
+	origHasCommitsAhead := hasCommitsAheadFn
+	defer func() {
+		isCleanFn = origIsClean
+		hasCommitsAheadFn = origHasCommitsAhead
+	}()
+
+	isCleanFn = func(string) (bool, []git.FileStatus, error) {
+		return false, nil, errors.New("missing worktree")
+	}
+	hasCommitsAheadFn = func(string, string, string) (bool, error) { return false, nil }
+
+	message, err := dropConfirmationMessage(root, cfg, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(message, "WARNING: dropping work item 1 (Cleanup task)") {
+		t.Fatalf("missing warning in %q", message)
+	}
+	if !strings.Contains(message, "could not be inspected; it may already be clean") {
+		t.Fatalf("missing already-clean note in %q", message)
+	}
+	if strings.Contains(message, "Uncommitted changes will be lost") {
+		t.Fatalf("did not expect dirty warning in %q", message)
 	}
 }
 
